@@ -1,99 +1,48 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
+import { FileItem, StatsResponse } from "./types/archive";
+import { ArchiveApiClient } from "./services/apiClient";
+import { Sidebar } from "./components/Sidebar";
+import { Preview } from "./components/Preview";
+import { FileDetailModal } from "./components/FileDetailModal";
+import { ImportDialog } from "./components/ImportDialog";
 
-type Item = {
-  id: number;
-  title: string;
-  kind: string;
-  topic: string;
-  status: string;
-  text: string;
-  color: string;
-  tags: string[];
-};
-const initial: Item[] = [
-  {
-    id: 1,
-    title: "یادداشت‌های طراحی و معماری",
-    kind: "سند",
-    topic: "طراحی",
-    status: "آماده",
-    text: "طراحی خوب از شناخت مسئله آغاز می‌شود. در این یادداشت، اصول طراحی یک محصول ساده، خوانا و قابل استفاده را مرور می‌کنیم.",
-    color: "paper",
-    tags: ["طراحی محصول", "یادداشت"],
-  },
-  {
-    id: 2,
-    title: "رنگ، فضا و زندگی روزمره",
-    kind: "تصویر",
-    topic: "معماری",
-    status: "آماده",
-    text: "تصویری از یک فضای آرام با نور طبیعی، دیوارهای روشن و جزئیات سبز. این توصیف، برداشت نمایشی مدل است.",
-    color: "room",
-    tags: ["فضای داخلی", "الهام"],
-  },
-  {
-    id: 3,
-    title: "چطور بهتر یاد بگیریم؟",
-    kind: "اسکرین‌شات",
-    topic: "آموزش",
-    status: "نیازمند بازبینی",
-    text: "یادگیری عمیق با تمرین‌های کوتاه و پیوسته شکل می‌گیرد. بین مطالعه‌ها فاصله بگذارید و آنچه آموخته‌اید را با زبان خودتان بازگو کنید.",
-    color: "social",
-    tags: ["یادگیری", "مطالعه"],
-  },
-  {
-    id: 4,
-    title: "گزارش پژوهش‌های هوش مصنوعی",
-    kind: "سند",
-    topic: "فناوری",
-    status: "آماده",
-    text: "این گزارش به بررسی کاربرد مدل‌های زبانی در دسته‌بندی و بازیابی اسناد می‌پردازد.",
-    color: "report",
-    tags: ["پژوهش", "هوش مصنوعی"],
-  },
-  {
-    id: 5,
-    title: "سفر به جنگل‌های شمال",
-    kind: "تصویر",
-    topic: "زندگی",
-    status: "آماده",
-    text: "جنگلی مه‌آلود با درختان بلند و مسیر باریک میان پوشش سبز.",
-    color: "forest",
-    tags: ["طبیعت", "سفر"],
-  },
-  {
-    id: 6,
-    title: "دست‌نوشته‌های جلسهٔ محصول",
-    kind: "سند",
-    topic: "کار",
-    status: "تحلیل ناقص",
-    text: "موضوع جلسه، ساده‌سازی ورود فایل و نمایش روشن وضعیت پردازش بود. بخشی از نوشته در نمونه خوانا نیست.",
-    color: "notes",
-    tags: ["جلسه", "محصول"],
-  },
-];
-const nav = [
-  "کتابخانه",
-  "جست‌وجو",
-  "دسته‌بندی‌ها",
-  "صف پردازش",
-  "بازبینی",
-  "منابع",
-];
 const digits = (value: number) => value.toLocaleString("fa-IR");
 
 function App() {
-  const [items, setItems] = useState(initial);
+  const [items, setItems] = useState<FileItem[]>([]);
+  const [stats, setStats] = useState<StatsResponse>({ total_files: 0, ready_files: 0, attention_files: 0 });
   const [page, setPage] = useState("کتابخانه");
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState("همهٔ فایل‌ها");
   const [view, setView] = useState("grid");
-  const [selected, setSelected] = useState<Item | null>(null);
+  const [selected, setSelected] = useState<FileItem | null>(null);
   const [adding, setAdding] = useState(false);
-  const [tag, setTag] = useState("");
-  const [notice, setNotice] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  // Load files and stats from API / Local Persistence
+  const refreshData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [fetchedFiles, fetchedStats] = await Promise.all([
+        ArchiveApiClient.listFiles(kind, query, page === "بازبینی" ? "نیازمند بازبینی" : undefined),
+        ArchiveApiClient.getStats()
+      ]);
+      setItems(fetchedFiles);
+      setStats(fetchedStats);
+    } catch (e) {
+      console.error("Failed to load archive data", e);
+    } finally {
+      setLoading(false);
+    }
+  }, [kind, query, page]);
+
+  useEffect(() => {
+    refreshData();
+  }, [refreshData]);
+
+  // Modal accessibility & focus management
   const modalOpen = selected !== null || adding;
   useEffect(() => {
     if (!modalOpen) return;
@@ -131,77 +80,58 @@ function App() {
       document.removeEventListener("keydown", handleKey);
       document.body.style.overflow = previousOverflow;
       previousFocus?.focus();
-      setNotice("");
-      setTag("");
     };
   }, [modalOpen]);
-  const results = items.filter(
-    (item) =>
-      (kind === "همهٔ فایل‌ها" || item.kind === kind) &&
-      `${item.title} ${item.text} ${item.tags.join(" ")}`.includes(query) &&
-      (page !== "بازبینی" || item.status === "نیازمند بازبینی"),
-  );
-  function update(item: Item) {
-    setItems((current) =>
-      current.map((entry) => (entry.id === item.id ? item : entry)),
-    );
-    setSelected(item);
-  }
+
+  // Update file handler
+  const handleUpdate = async (updated: FileItem) => {
+    try {
+      await ArchiveApiClient.updateFile(updated.id, {
+        topic: updated.topic,
+        status: updated.status,
+        tags: updated.tags
+      });
+      setSelected(updated);
+      await refreshData();
+    } catch (err) {
+      console.error("Failed to update file", err);
+    }
+  };
+
+  const handleAddTag = async (fileId: string, tag: string) => {
+    const updated = await ArchiveApiClient.addTag(fileId, tag);
+    if (updated) {
+      setSelected(updated);
+      await refreshData();
+    }
+  };
+
+  const handleRemoveTag = async (fileId: string, tag: string) => {
+    const updated = await ArchiveApiClient.removeTag(fileId, tag);
+    if (updated) {
+      setSelected(updated);
+      await refreshData();
+    }
+  };
+
+  // Import handler
+  const handleImportFiles = async (files: FileList) => {
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      await ArchiveApiClient.importFile(file);
+    }
+    await refreshData();
+  };
+
   return (
     <div className="shell">
-      <aside className="sidebar">
-        <a className="brand" href="#" onClick={() => setPage("کتابخانه")}>
-          <span className="brandmark">سـ</span>
-          <span>
-            ساهر<small>آرشیو شخصی هوشمند</small>
-          </span>
-        </a>
-        <div className="workspace">
-          <span className="avatar">م</span>
-          <div>
-            فضای شخصی من<small>آرشیو محلی</small>
-          </div>
-          <span className="chevron">⌄</span>
-        </div>
-        <div className="navlabel">فضای کار</div>
-        <nav>
-          {nav.map((name, index) => (
-            <button
-              key={name}
-              className={page === name ? "active" : ""}
-              onClick={() => {
-                setPage(name);
-                setQuery("");
-              }}
-            >
-              <span className="navicon">
-                {["▦", "⌕", "◇", "≋", "☑", "▱"][index]}
-              </span>
-              <span>{name}</span>
-              {name === "بازبینی" && (
-                <b>
-                  {digits(
-                    items.filter((i) => i.status === "نیازمند بازبینی").length,
-                  )}
-                </b>
-              )}
-            </button>
-          ))}
-        </nav>
-        <div className="bottomnav">
-          {["پشتیبان‌گیری", "تنظیمات"].map((name, i) => (
-            <button key={name} onClick={() => setPage(name)}>
-              <span className="navicon">{i ? "⚙" : "◷"}</span>
-              {name}
-            </button>
-          ))}
-        </div>
-        <div className="local">
-          <span className="dot" />
-          نمونهٔ نمایشی آفلاین
-          <small>داده‌ها روی همین صفحه نمایش داده می‌شوند</small>
-        </div>
-      </aside>
+      <Sidebar
+        page={page}
+        setPage={setPage}
+        setQuery={setQuery}
+        attentionCount={stats.attention_files}
+        digits={digits}
+      />
       <main>
         <header>
           <span>
@@ -229,7 +159,7 @@ function App() {
               <div>
                 <small>تمام فایل‌ها</small>
                 <strong>
-                  {digits(items.length)}
+                  {digits(stats.total_files)}
                   <em>فایل در کتابخانه</em>
                 </strong>
               </div>
@@ -239,7 +169,7 @@ function App() {
               <div>
                 <small>آمادهٔ جست‌وجو</small>
                 <strong>
-                  {digits(items.filter((i) => i.status === "آماده").length)}
+                  {digits(stats.ready_files)}
                   <em>پردازش کامل شده</em>
                 </strong>
               </div>
@@ -249,7 +179,7 @@ function App() {
               <div>
                 <small>نیازمند توجه شما</small>
                 <strong>
-                  {digits(items.filter((i) => i.status !== "آماده").length)}
+                  {digits(stats.attention_files)}
                   <em>بازبینی و تحلیل ناقص</em>
                 </strong>
               </div>
@@ -304,19 +234,16 @@ function App() {
               <div className="sectionline">
                 <h2>
                   {query ? "نتیجهٔ جست‌وجو" : "آخرین فایل‌های شما"}{" "}
-                  <span>{digits(results.length)} فایل</span>
+                  <span>{digits(items.length)} فایل</span>
                 </h2>
-                <span>نمایش نمونه‌های کتابخانه</span>
+                <span>{loading ? "در حال دریافت اطلاعات..." : "پایگاه‌داده محلی ساهر"}</span>
               </div>
               <section className={`files ${view}`}>
-                {results.map((item) => (
+                {items.map((item) => (
                   <button
                     className="filecard"
                     key={item.id}
-                    onClick={() => {
-                      setNotice("");
-                      setSelected(item);
-                    }}
+                    onClick={() => setSelected(item)}
                   >
                     <div className={`preview ${item.color}`}>
                       <Preview item={item} />
@@ -332,16 +259,14 @@ function App() {
                       <div className="cardmeta">
                         <span>{item.topic}</span>
                         <span>
-                          {item.id > 6
-                            ? "همین حالا"
-                            : `امروز · ${digits(item.id + 8)}:${digits(20 + item.id)}`}
+                          {item.created_at ? new Date(item.created_at).toLocaleDateString("fa-IR") : "امروز"}
                         </span>
                       </div>
                     </div>
                   </button>
                 ))}
               </section>
-              {!results.length && (
+              {!items.length && !loading && (
                 <div className="empty">
                   فایلی با این مشخصات پیدا نشد.
                   <button
@@ -361,9 +286,23 @@ function App() {
               <h2>{page}</h2>
               <p>
                 {page === "صف پردازش"
-                  ? "در این نمونه، پردازش واقعی انجام نمی‌شود. وضعیت فایل‌ها از نمای جزئیات قابل تغییر است."
-                  : `این بخش در مرحلهٔ بعد طراحی می‌شود. فعلاً می‌توانید کتابخانه و جزئیات فایل‌ها را بررسی کنید.`}
+                  ? "صف پردازش پس‌زمینه برای استخراج فشرده، اجرای مدل دیداری Qwen2.5-VL و ساخت بردارهای معنایی در حال اتصال است."
+                  : page === "تنظیمات"
+                  ? "تنظیمات آرشیو آفلاین، مسیر ذخیره‌سازی پایگاه‌داده و مدیریت مدل‌های هوش مصنوعی محلی."
+                  : `این بخش در مرحلهٔ بعد پیاده‌سازی می‌شود. هم‌اکنون می‌توانید ذخیره‌سازی، جست‌وجوی متنی و استخراج اسناد را در بخش کتابخانه آزمایش کنید.`}
               </p>
+              {page === "تنظیمات" && (
+                <button
+                  style={{ marginTop: "1rem" }}
+                  onClick={() => {
+                    ArchiveApiClient.resetFallbackStorage();
+                    refreshData();
+                    alert("داده‌های محلی به حالت اولیه بازنشانی شدند.");
+                  }}
+                >
+                  بازنشانی داده‌های نمونه
+                </button>
+              )}
               <button onClick={() => setPage("کتابخانه")}>
                 رفتن به کتابخانه
               </button>
@@ -371,214 +310,29 @@ function App() {
           )}
           <footer>
             <span>◈ محتوای شما، روی دستگاه شما</span>
-            <span>نسخهٔ اولیهٔ طراحی · داده‌های نمایشی</span>
+            <span>بایگانی محلی آفلاین ساهر · پایگاه‌داده پایدار SQLite FTS5</span>
           </footer>
         </div>
       </main>
       {selected && (
-        <div className="overlay" onClick={() => setSelected(null)}>
-          <section
-            className="detail"
-            role="dialog"
-            aria-modal="true"
-            aria-label="جزئیات فایل"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="dialoghead">
-              <div>
-                <small>جزئیات فایل</small>
-                <h2>{selected.title}</h2>
-              </div>
-              <button
-                className="close"
-                aria-label="بستن جزئیات"
-                onClick={() => setSelected(null)}
-              >
-                ×
-              </button>
-            </div>
-            <div className={`preview large ${selected.color}`}>
-              <Preview item={selected} />
-            </div>
-            <span className="status">{selected.status}</span>
-            <h3>متن استخراج‌شده · صفحهٔ ۱</h3>
-            <p className="extracted">{selected.text}</p>
-            <h3>موضوع پیشنهادی</h3>
-            <select
-              aria-label="موضوع فایل"
-              value={selected.topic}
-              onChange={(e) => update({ ...selected, topic: e.target.value })}
-            >
-              {["طراحی", "معماری", "آموزش", "فناوری", "زندگی", "کار"].map(
-                (t) => (
-                  <option key={t}>{t}</option>
-                ),
-              )}
-            </select>
-            <h3>برچسب‌ها</h3>
-            <div className="tags">
-              {selected.tags.map((t) => (
-                <button
-                  key={t}
-                  title="حذف برچسب"
-                  onClick={() =>
-                    update({
-                      ...selected,
-                      tags: selected.tags.filter((x) => x !== t),
-                    })
-                  }
-                >
-                  {t} ×
-                </button>
-              ))}
-            </div>
-            <form
-              className="tagform"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (tag.trim() && !selected.tags.includes(tag.trim()))
-                  update({ ...selected, tags: [...selected.tags, tag.trim()] });
-                setTag("");
-              }}
-            >
-              <input
-                aria-label="برچسب جدید"
-                placeholder="برچسب جدید…"
-                value={tag}
-                onChange={(e) => setTag(e.target.value)}
-              />
-              <button>افزودن</button>
-            </form>
-            <div className="evidence">
-              این محتوا نمونهٔ نمایشی است. استخراج متن و تحلیل هوشمند هنوز به
-              سرویس پردازش متصل نشده‌اند.
-            </div>
-            <div className="actions">
-              <button
-                className="primary"
-                onClick={() => {
-                  update({ ...selected, status: "آماده" });
-                  setNotice("اصلاح شما در این نشست ثبت شد.");
-                }}
-              >
-                تأیید و ثبت اصلاح
-              </button>
-              <button
-                onClick={() => {
-                  update({ ...selected, status: "در صف" });
-                  setNotice("فایل به صف نمایشی اضافه شد.");
-                }}
-              >
-                پردازش دوباره
-              </button>
-            </div>
-            {notice && <p role="status">{notice}</p>}
-          </section>
-        </div>
+        <FileDetailModal
+          selected={selected}
+          onClose={() => setSelected(null)}
+          onUpdate={handleUpdate}
+          onAddTag={handleAddTag}
+          onRemoveTag={handleRemoveTag}
+        />
       )}
       {adding && (
-        <div className="overlay" onClick={() => setAdding(false)}>
-          <section
-            className="importdialog"
-            role="dialog"
-            aria-modal="true"
-            aria-label="افزودن فایل"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="dialoghead">
-              <h2>جای تازه‌ای برای فایل‌های شما</h2>
-              <button
-                className="close"
-                aria-label="بستن"
-                onClick={() => setAdding(false)}
-              >
-                ×
-              </button>
-            </div>
-            <p>چند فایل انتخاب کنید تا به کتابخانهٔ نمایشی اضافه شوند.</p>
-            <label className="dropzone">
-              <span>＋</span>
-              <strong>انتخاب فایل از دستگاه</strong>
-              <small>سند، تصویر یا اسکرین‌شات</small>
-              <input
-                type="file"
-                multiple
-                onChange={(e) => {
-                  const added = Array.from(e.target.files ?? []).map(
-                    (f, index) => ({
-                      id: Date.now() + index,
-                      title: f.name,
-                      kind: f.type.startsWith("image/") ? "تصویر" : "سند",
-                      topic: "کار",
-                      status: "در صف",
-                      text: "فایل برای نمونهٔ رابط اضافه شده است. محتوای آن هنوز پردازش نشده است.",
-                      color: "paper",
-                      tags: [],
-                    }),
-                  );
-                  setItems((current) => [...added, ...current]);
-                  setAdding(false);
-                }}
-              />
-            </label>
-            <div className="evidence">
-              در این نسخه فقط نام فایل ثبت می‌شود. وضعیت پردازش نمایشی است و با
-              تازه‌کردن صفحه، داده‌های اولیه برمی‌گردند.
-            </div>
-          </section>
-        </div>
+        <ImportDialog
+          onClose={() => setAdding(false)}
+          onImport={handleImportFiles}
+        />
       )}
     </div>
   );
 }
-function Preview({ item }: { item: Item }) {
-  if (item.color === "room")
-    return (
-      <div className="roomscene">
-        <div className="window" />
-        <div className="arch" />
-        <div className="table" />
-        <div className="vase" />
-      </div>
-    );
-  if (item.color === "forest")
-    return (
-      <div className="forestscene">
-        {[0, 1, 2, 3, 4, 5, 6].map((i) => (
-          <i
-            key={i}
-            style={{ left: `${i * 16 - 5}%`, height: `${100 + (i % 3) * 20}%` }}
-          />
-        ))}
-      </div>
-    );
-  if (item.color === "social")
-    return (
-      <div className="socialsheet">
-        <small>یادداشت‌های یک ذهن کنجکاو</small>
-        <b>
-          کمتر بخوان،
-          <br />
-          عمیق‌تر یاد بگیر.
-        </b>
-        <span>هر روز، یک قدم کوچک</span>
-      </div>
-    );
-  return (
-    <div className="document">
-      <small>
-        {item.color === "report" ? "پژوهش و فناوری" : "دفتر یادداشت‌ها"}
-      </small>
-      <strong>{item.title}</strong>
-      <div className="doclines">
-        {[1, 2, 3, 4, 5].map((n) => (
-          <i key={n} style={{ width: `${90 - (n % 3) * 12}%` }} />
-        ))}
-      </div>
-      <span className="docseal">{item.color === "notes" ? "✎" : "ساهر"}</span>
-    </div>
-  );
-}
+
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <App />

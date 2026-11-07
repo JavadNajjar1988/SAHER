@@ -1,0 +1,119 @@
+import sqlite3
+import os
+from contextlib import contextmanager
+from typing import Generator
+from services.api.config import settings
+
+def get_db_connection() -> sqlite3.Connection:
+    os.makedirs(os.path.dirname(settings.db_path), exist_ok=True)
+    conn = sqlite3.connect(settings.db_path, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute("PRAGMA journal_mode = WAL;")
+    return conn
+
+@contextmanager
+def get_db() -> Generator[sqlite3.Connection, None, None]:
+    conn = get_db_connection()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+def init_db(conn: sqlite3.Connection | None = None) -> None:
+    close_after = False
+    if conn is None:
+        conn = get_db_connection()
+        close_after = True
+    
+    with conn:
+        # 1. Archives table
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS archives (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            policy TEXT NOT NULL DEFAULT 'copy', -- 'copy' or 'reference'
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+
+        # Default archive entry
+        conn.execute("""
+        INSERT OR IGNORE INTO archives (id, name, description, policy)
+        VALUES ('default', 'فضای شخصی من', 'آرشیو اصلی محلی', 'copy');
+        """)
+
+        # 2. Files table
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS files (
+            id TEXT PRIMARY KEY,
+            archive_id TEXT NOT NULL REFERENCES archives(id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            kind TEXT NOT NULL, -- 'سند', 'تصویر', 'اسکرین‌شات'
+            topic TEXT NOT NULL DEFAULT 'کار',
+            status TEXT NOT NULL DEFAULT 'در صف', -- 'آماده', 'در صف', 'در حال پردازش', 'تحلیل ناقص', 'نیازمند بازبینی', 'خطا'
+            mime_type TEXT NOT NULL,
+            file_size INTEGER NOT NULL,
+            sha256 TEXT NOT NULL,
+            storage_path TEXT NOT NULL,
+            color_scheme TEXT NOT NULL DEFAULT 'paper',
+            error_message TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+
+        # Index on SHA-256 for fast duplicate detection
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_files_sha256 ON files(sha256);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);")
+
+        # 3. Documents / Extracted Text
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS documents (
+            id TEXT PRIMARY KEY,
+            file_id TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+            extracted_text TEXT NOT NULL DEFAULT '',
+            summary TEXT,
+            page_count INTEGER NOT NULL DEFAULT 1,
+            extraction_method TEXT NOT NULL DEFAULT 'direct', -- 'direct', 'ocr', 'metadata'
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_file_id ON documents(file_id);")
+
+        # 4. Tags
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL
+        );
+        """)
+
+        # 5. File Tags (Many-to-Many)
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS file_tags (
+            file_id TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+            tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+            PRIMARY KEY (file_id, tag_id)
+        );
+        """)
+
+        # 6. Full-Text Search Table (FTS5)
+        conn.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
+            file_id UNINDEXED,
+            title,
+            extracted_text,
+            topic,
+            tags,
+            tokenize = 'unicode61'
+        );
+        """)
+
+    if close_after:
+        conn.close()

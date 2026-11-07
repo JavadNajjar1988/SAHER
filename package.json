@@ -6,8 +6,9 @@
     "apps/web"
   ],
   "scripts": {
-    "dev": "npm run dev --workspace=apps/web --",
+    "dev": "npm run dev --workspace=apps/web",
     "build": "npm run build --workspace=apps/web",
-    "preview": "npm run preview --workspace=apps/web --"
+    "lint": "npm run build --workspace=apps/web",
+    "preview": "npm run preview --workspace=apps/web"
   }
 }
