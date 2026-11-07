@@ -6,6 +6,7 @@ interface SidebarProps {
   setPage: (p: string) => void;
   setQuery: (q: string) => void;
   attentionCount: number;
+  activeJobCount?: number;
   digits: (n: number) => string;
   connectionMode: ConnectionMode;
   backendVersion?: string;
@@ -25,6 +26,7 @@ export function Sidebar({
   setPage,
   setQuery,
   attentionCount,
+  activeJobCount = 0,
   digits,
   connectionMode,
   backendVersion,
@@ -47,12 +49,12 @@ export function Sidebar({
           ? "داده‌های نمایشی بدون ذخیره‌سازی دیسک"
           : "بررسی ارتباط با بک‌اند…";
 
-  const dotColor =
+  const dotClass =
     connectionMode === "connected"
-      ? "#38b27b"
+      ? "dot connected"
       : connectionMode === "disconnected"
-        ? "#e05a47"
-        : "#d99b26";
+        ? "dot disconnected"
+        : "dot checking";
 
   return (
     <aside className="sidebar">
@@ -93,6 +95,9 @@ export function Sidebar({
             </span>
             <span>{name}</span>
             {name === "بازبینی" && <b>{digits(attentionCount)}</b>}
+            {name === "صف پردازش" && activeJobCount > 0 && (
+              <b>{digits(activeJobCount)}</b>
+            )}
           </button>
         ))}
       </nav>
@@ -109,7 +114,7 @@ export function Sidebar({
         ))}
       </div>
       <div className="local" data-testid="service-health-indicator">
-        <span className="dot" style={{ background: dotColor }} />
+        <span className={dotClass} />
         {statusLabel}
         <small>{statusSubtext}</small>
       </div>

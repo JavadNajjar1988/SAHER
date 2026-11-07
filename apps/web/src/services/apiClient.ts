@@ -3,6 +3,12 @@ import {
   StatsResponse,
   HealthResponse,
   FileUpdatePayload,
+  JobItem,
+  JobListResponse,
+  ReanalyzeResponse,
+  ResourceMode,
+  LegacyMigrationReport,
+  LegacyMigrationResult,
 } from "../types/archive";
 
 export class ApiClientError extends Error {
@@ -49,6 +55,11 @@ export const EXPLICIT_DEMO_SAMPLES: FileItem[] = [
     text: "طراحی خوب از شناخت مسئله آغاز می‌شود. در این یادداشت، اصول طراحی یک محصول ساده، خوانا و قابل استفاده را مرور می‌کنیم.",
     extraction_status: "extracted",
     extraction_method: "direct_text",
+    extraction_version: 1,
+    processing_version: 1,
+    job_state: "COMPLETED",
+    processing_stage: "FINALIZATION",
+    processing_progress: 100,
     system_note: "رکورد نمایشی برای بررسی رابط کاربری (در پایگاه‌داده ذخیره نشده است).",
     color: "paper",
     tags: ["طراحی محصول", "یادداشت"],
@@ -68,6 +79,11 @@ export const EXPLICIT_DEMO_SAMPLES: FileItem[] = [
     text: "این گزارش به بررسی کاربرد مدل‌های زبانی در دسته‌بندی و بازیابی اسناد می‌پردازد.",
     extraction_status: "extracted",
     extraction_method: "direct_text",
+    extraction_version: 1,
+    processing_version: 1,
+    job_state: "COMPLETED",
+    processing_stage: "FINALIZATION",
+    processing_progress: 100,
     system_note: "رکورد نمایشی برای بررسی رابط کاربری (در پایگاه‌داده ذخیره نشده است).",
     color: "report",
     tags: ["پژوهش", "هوش مصنوعی"],
@@ -87,6 +103,11 @@ export const EXPLICIT_DEMO_SAMPLES: FileItem[] = [
     text: "",
     extraction_status: "pending_ocr",
     extraction_method: "none",
+    extraction_version: 1,
+    processing_version: 1,
+    job_state: "COMPLETED",
+    processing_stage: "OCR_PENDING",
+    processing_progress: 100,
     system_note: "این یک نمونهٔ نمایشی از تصویر بدون متن استخراج‌شده است که در انتظار اجرای OCR قرار دارد.",
     color: "social",
     tags: ["یادگیری", "مطالعه"],
@@ -98,10 +119,6 @@ export const EXPLICIT_DEMO_SAMPLES: FileItem[] = [
 const LEGACY_LOCAL_STORAGE_KEY = "saher_offline_archive_files_v1";
 
 export class LegacyBrowserDataHelper {
-  /**
-   * Checks if the user had any custom-added entries in the legacy prototype's localStorage
-   * so they can export them safely without silently mixing them into production SQLite state.
-   */
   static getLegacyUserEntries(): FileItem[] {
     try {
       if (typeof localStorage === "undefined") return [];
@@ -141,6 +158,11 @@ function getConfiguredOrigin(): string {
 export class ArchiveApiClient {
   private static defaultTimeoutMs = 15000;
   private static uploadTimeoutMs = 60000;
+  private static sessionToken: string | null = null;
+
+  static setSessionToken(token: string | null): void {
+    this.sessionToken = token;
+  }
 
   private static buildUrl(path: string): string {
     const origin = getConfiguredOrigin();
@@ -157,6 +179,9 @@ export class ArchiveApiClient {
 
     const headers = new Headers(init.headers || {});
     headers.set("X-Saher-Client", "web-ui");
+    if (this.sessionToken) {
+      headers.set("X-Saher-Session-Token", this.sessionToken);
+    }
     if (!headers.has("Accept")) {
       headers.set("Accept", "application/json");
     }
@@ -264,15 +289,22 @@ export class ArchiveApiClient {
     return this.buildUrl(`/api/v1/files/${encodeURIComponent(fileId)}/content`);
   }
 
-  static async importFile(file: File, topic?: string): Promise<FileItem> {
+  static async importFile(
+    file: File,
+    topic?: string,
+    options?: { asyncMode?: boolean },
+  ): Promise<FileItem> {
     const formData = new FormData();
     formData.append("file", file);
     if (topic) formData.append("topic", topic);
+    const asyncMode = options?.asyncMode ?? true;
+    formData.append("async_mode", asyncMode ? "true" : "false");
 
     return this.requestJson<FileItem>(
-      "/api/v1/files/import",
+      `/api/v1/files/import?async_mode=${asyncMode ? "true" : "false"}`,
       {
         method: "POST",
+        headers: asyncMode ? { "X-Saher-Async": "true" } : undefined,
         body: formData,
       },
       this.uploadTimeoutMs,
@@ -300,6 +332,110 @@ export class ArchiveApiClient {
       `/api/v1/files/${encodeURIComponent(fileId)}/tags/${encodeURIComponent(tag)}`,
       {
         method: "DELETE",
+      },
+    );
+  }
+
+  // Milestone 2: Job Management & Reprocessing APIs
+  static async listJobs(params?: {
+    state?: string;
+    stage?: string;
+    fileId?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<JobListResponse> {
+    const qs = new URLSearchParams();
+    if (params?.state && params.state !== "ALL") qs.set("state", params.state);
+    if (params?.stage && params.stage !== "ALL") qs.set("stage", params.stage);
+    if (params?.fileId) qs.set("file_id", params.fileId);
+    qs.set("limit", String(params?.limit ?? 50));
+    qs.set("offset", String(params?.offset ?? 0));
+
+    return this.requestJson<JobListResponse>(`/api/v1/jobs?${qs.toString()}`, {
+      method: "GET",
+    });
+  }
+
+  static async getJob(jobId: string): Promise<JobItem> {
+    return this.requestJson<JobItem>(`/api/v1/jobs/${encodeURIComponent(jobId)}`, {
+      method: "GET",
+    });
+  }
+
+  static async pauseJob(jobId: string): Promise<JobItem> {
+    return this.requestJson<JobItem>(`/api/v1/jobs/${encodeURIComponent(jobId)}/pause`, {
+      method: "POST",
+    });
+  }
+
+  static async resumeJob(jobId: string): Promise<JobItem> {
+    return this.requestJson<JobItem>(`/api/v1/jobs/${encodeURIComponent(jobId)}/resume`, {
+      method: "POST",
+    });
+  }
+
+  static async cancelJob(jobId: string): Promise<JobItem> {
+    return this.requestJson<JobItem>(`/api/v1/jobs/${encodeURIComponent(jobId)}/cancel`, {
+      method: "POST",
+    });
+  }
+
+  static async retryJob(jobId: string): Promise<JobItem> {
+    return this.requestJson<JobItem>(`/api/v1/jobs/${encodeURIComponent(jobId)}/retry`, {
+      method: "POST",
+    });
+  }
+
+  static async reanalyzeFile(
+    fileId: string,
+    stage?: string,
+    priority: number = 60,
+  ): Promise<ReanalyzeResponse> {
+    return this.requestJson<ReanalyzeResponse>(
+      `/api/v1/files/${encodeURIComponent(fileId)}/reanalyze`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stage: stage || null, priority }),
+      },
+    );
+  }
+
+  static async updateWorkerConfig(
+    resourceMode: ResourceMode,
+    concurrency?: number,
+  ): Promise<{
+    resource_mode: ResourceMode;
+    concurrency: number;
+    worker_online: boolean;
+  }> {
+    return this.requestJson(`/api/v1/workers/config`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resource_mode: resourceMode, concurrency }),
+    });
+  }
+
+  // Safe Legacy Migration Preview, Approval & Restoration APIs
+  static async previewLegacyMigration(): Promise<LegacyMigrationReport> {
+    return this.requestJson<LegacyMigrationReport>(`/api/v1/migrations/legacy-preview`, {
+      method: "GET",
+    });
+  }
+
+  static async executeLegacyCleanup(confirmApproval: boolean): Promise<LegacyMigrationResult> {
+    return this.requestJson<LegacyMigrationResult>(`/api/v1/migrations/legacy-cleanup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm_approval: confirmApproval }),
+    });
+  }
+
+  static async restoreMigrationBackup(backupId: string): Promise<LegacyMigrationResult> {
+    return this.requestJson<LegacyMigrationResult>(
+      `/api/v1/migrations/restore/${encodeURIComponent(backupId)}`,
+      {
+        method: "POST",
       },
     );
   }

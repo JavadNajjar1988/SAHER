@@ -43,7 +43,7 @@ export function ImportDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="dialoghead">
-          <h2>واردسازی و بایگانی پایدار فایل در ساهر</h2>
+          <h2>واردسازی و ثبت کار پردازشی پایدار در ساهر</h2>
           <button
             className="close"
             aria-label="بستن"
@@ -54,20 +54,20 @@ export function ImportDialog({
           </button>
         </div>
         <p>
-          فایل انتخابی پس از بررسی امضای باینری و محاسبهٔ هش SHA-256، در مخزن محلی ذخیره و در پایگاه‌داده SQLite نمایه می‌شود.
+          فایل انتخابی پس از بررسی امضای باینری و محاسبهٔ هش SHA-256، در مخزن محلی ذخیره شده و یک کار پردازشی پایدار (Job) برای استخراج متن و نمایه‌سازی FTS5 در کارگر پس‌زمینه ایجاد می‌شود.
         </p>
 
-        <div style={{ marginBottom: "0.75rem" }}>
-          <label htmlFor="import-topic-select" style={{ display: "block", marginBottom: "0.35rem", fontSize: "0.9rem" }}>
+        <div className="import-topic-group">
+          <label htmlFor="import-topic-select" className="import-topic-label">
             موضوع پیش‌فرض فایل ورودی:
           </label>
           <select
             id="import-topic-select"
             aria-label="موضوع فایل ورودی"
+            className="full-width-select"
             value={selectedTopic}
             disabled={isUploading}
             onChange={(e) => setSelectedTopic(e.target.value)}
-            style={{ width: "100%" }}
           >
             {["کار", "طراحی", "معماری", "آموزش", "فناوری", "زندگی", "پژوهش"].map((t) => (
               <option key={t} value={t}>
@@ -77,17 +77,11 @@ export function ImportDialog({
           </select>
         </div>
 
-        <label
-          className="dropzone"
-          style={{
-            cursor: isUploading ? "wait" : "pointer",
-            opacity: isUploading ? 0.7 : 1,
-          }}
-        >
+        <label className={isUploading ? "dropzone uploading" : "dropzone"}>
           <span>{isUploading ? "◌" : "＋"}</span>
           <strong>
             {isUploading
-              ? "در حال ارسال، اعتبارسنجی باینری و استخراج متن در بک‌اند…"
+              ? "در حال ارسال، اعتبارسنجی باینری و ثبت در صف پردازش…"
               : "انتخاب فایل از دستگاه"}
           </strong>
           <small>
@@ -106,21 +100,13 @@ export function ImportDialog({
           <div
             role="alert"
             data-testid="import-error-alert"
-            style={{
-              color: "#a82010",
-              background: "#fdecea",
-              border: "1px solid #f5c2c0",
-              borderRadius: "8px",
-              padding: "0.75rem",
-              marginTop: "0.75rem",
-              fontSize: "0.9rem",
-            }}
+            className="import-error-alert"
           >
             <strong>خطا در واردسازی:</strong> {errorMessage}
           </div>
         )}
 
-        <div className="evidence" style={{ marginTop: "0.75rem" }}>
+        <div className="evidence">
           توجه: فایل‌های تکراری (دارای هش SHA-256 یکسان)، فایل‌های آسیب‌دیده یا دارای پسوند جعلی به‌طور خودکار توسط سرویس بک‌اند رد می‌شوند.
         </div>
       </section>

@@ -4,13 +4,16 @@ from contextlib import contextmanager
 from typing import Generator
 from services.api.config import settings
 
+
 def get_db_connection() -> sqlite3.Connection:
     os.makedirs(os.path.dirname(settings.db_path), exist_ok=True)
-    conn = sqlite3.connect(settings.db_path, check_same_thread=False, timeout=15.0)
+    conn = sqlite3.connect(settings.db_path, check_same_thread=False, timeout=20.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA busy_timeout = 15000;")
     return conn
+
 
 @contextmanager
 def get_db() -> Generator[sqlite3.Connection, None, None]:
@@ -24,11 +27,23 @@ def get_db() -> Generator[sqlite3.Connection, None, None]:
     finally:
         conn.close()
 
+
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, col_def: str) -> None:
     cur = conn.execute(f"PRAGMA table_info({table});")
     existing = {row[1] for row in cur.fetchall()}
     if column not in existing:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def};")
+
+
+def _record_schema_migration(conn: sqlite3.Connection, version: str, description: str) -> None:
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO schema_migrations (version, description)
+        VALUES (?, ?)
+        """,
+        (version, description),
+    )
+
 
 def init_db(conn: sqlite3.Connection | None = None) -> None:
     close_after = False
@@ -37,6 +52,15 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
         close_after = True
 
     with conn:
+        # 0. Versioned non-destructive schema migrations tracking table
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version TEXT PRIMARY KEY,
+            description TEXT NOT NULL,
+            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+
         # 1. Archives table
         conn.execute("""
         CREATE TABLE IF NOT EXISTS archives (
@@ -70,12 +94,16 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
             error_code TEXT,
             error_message TEXT,
             is_user_modified INTEGER NOT NULL DEFAULT 0,
+            processing_version INTEGER NOT NULL DEFAULT 1,
+            latest_job_id TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
         _ensure_column(conn, "files", "error_code", "TEXT")
         _ensure_column(conn, "files", "is_user_modified", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "files", "processing_version", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(conn, "files", "latest_job_id", "TEXT")
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_files_sha256 ON files(sha256);")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);")
@@ -92,12 +120,16 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
             page_count INTEGER NOT NULL DEFAULT 1,
             extraction_status TEXT NOT NULL DEFAULT 'extracted',
             extraction_method TEXT NOT NULL DEFAULT 'direct_text',
+            extraction_version INTEGER NOT NULL DEFAULT 1,
             system_note TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
         _ensure_column(conn, "documents", "extraction_status", "TEXT NOT NULL DEFAULT 'extracted'")
         _ensure_column(conn, "documents", "system_note", "TEXT")
+        _ensure_column(conn, "documents", "extraction_version", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(conn, "documents", "updated_at", "TIMESTAMP")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_file_id ON documents(file_id);")
 
         # 4. Pages table (for page-level text & future OCR bounding boxes)
@@ -142,6 +174,93 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
             tokenize = 'unicode61'
         );
         """)
+
+        _record_schema_migration(conn, "001_milestone_1_5_base", "Initial archive, files, documents, pages, tags, and FTS5 schema")
+
+        # 8. Milestone 2: Durable Jobs table
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS jobs (
+            id TEXT PRIMARY KEY,
+            archive_id TEXT NOT NULL REFERENCES archives(id) ON DELETE CASCADE,
+            file_id TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+            job_type TEXT NOT NULL DEFAULT 'FILE_INGESTION',
+            target_stage TEXT,
+            processing_stage TEXT NOT NULL DEFAULT 'DISCOVERY',
+            state TEXT NOT NULL DEFAULT 'QUEUED',
+            priority INTEGER NOT NULL DEFAULT 50,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            max_retries INTEGER NOT NULL DEFAULT 3,
+            progress REAL NOT NULL DEFAULT 0.0,
+            progress_message TEXT,
+            error_code TEXT,
+            error_message TEXT,
+            is_retryable INTEGER NOT NULL DEFAULT 1,
+            worker_id TEXT,
+            lease_expires_at TIMESTAMP,
+            heartbeat_at TIMESTAMP,
+            next_run_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            processing_version INTEGER NOT NULL DEFAULT 1,
+            checkpoint_json TEXT NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            started_at TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP
+        );
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_claim ON jobs(state, next_run_at, priority DESC, created_at ASC);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_file_id ON jobs(file_id);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_archive_id ON jobs(archive_id);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_lease ON jobs(state, lease_expires_at);")
+
+        # 9. Milestone 2: Job Events / Execution Attempts history table
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS job_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+            attempt_number INTEGER NOT NULL DEFAULT 0,
+            from_state TEXT,
+            to_state TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            worker_id TEXT,
+            message TEXT,
+            error_code TEXT,
+            details_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events(job_id, id ASC);")
+
+        # 10. Milestone 2: Worker Registry table
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS worker_registry (
+            worker_id TEXT PRIMARY KEY,
+            resource_mode TEXT NOT NULL DEFAULT 'Balanced',
+            concurrency INTEGER NOT NULL DEFAULT 2,
+            active_jobs INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'ONLINE',
+            hostname TEXT,
+            pid INTEGER,
+            started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_heartbeat_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+
+        # 11. Safe Migration Audit Log table
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS migration_audit_log (
+            id TEXT PRIMARY KEY,
+            operation_type TEXT NOT NULL,
+            backup_id TEXT,
+            backup_path TEXT,
+            affected_count INTEGER NOT NULL DEFAULT 0,
+            preserved_count INTEGER NOT NULL DEFAULT 0,
+            details_json TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+
+        _record_schema_migration(conn, "002_milestone_2_durable_jobs", "Durable jobs, job_events, worker_registry, and migration_audit_log tables")
 
     if close_after:
         conn.close()

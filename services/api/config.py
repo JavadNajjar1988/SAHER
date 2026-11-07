@@ -1,9 +1,37 @@
 import os
+import secrets
+from typing import List
 from pydantic import BaseModel, Field
+
+
+def _parse_origins_env() -> List[str]:
+    default_origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "app://.",
+    ]
+    raw_env = os.environ.get("SAHER_ALLOWED_ORIGINS", "")
+    if raw_env.strip():
+        for item in raw_env.split(","):
+            cleaned = item.strip().rstrip("/")
+            if cleaned and cleaned not in default_origins:
+                default_origins.append(cleaned)
+
+    for env_key in ("APP_URL", "SHARED_APP_URL", "VITE_API_BASE_URL"):
+        val = os.environ.get(env_key, "").strip().rstrip("/")
+        if val and val not in default_origins:
+            default_origins.append(val)
+
+    return default_origins
+
 
 class Settings(BaseModel):
     app_name: str = "SAHER Offline Archive API"
-    app_version: str = "0.1.5"
+    app_version: str = "0.2.0"
     api_prefix: str = "/api/v1"
 
     # Operational mode: production archives start empty unless demo_mode is explicitly enabled
@@ -16,6 +44,7 @@ class Settings(BaseModel):
     data_dir: str = os.path.join(base_dir, "data")
     db_path: str = os.path.join(data_dir, "saher.db")
     storage_dir: str = os.path.join(data_dir, "storage")
+    backup_dir: str = os.path.join(data_dir, "backups")
 
     # Ingestion security & limits
     max_upload_size_bytes: int = Field(
@@ -29,21 +58,47 @@ class Settings(BaseModel):
     ]
     duplicate_policy: str = "reject"  # 'reject' prevents duplicate physical storage
 
-    # Server settings
+    # Server & Local Security settings
     host: str = "127.0.0.1"
     port: int = 8000
-    cors_origins: list[str] = [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://0.0.0.0:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "app://.",
-    ]
+    cors_origins: list[str] = Field(default_factory=_parse_origins_env)
+
+    # Session authentication for Electron / local desktop backend
+    session_auth_required: bool = Field(
+        default_factory=lambda: os.environ.get("SAHER_REQUIRE_SESSION_AUTH", "false").lower() in ("1", "true", "yes")
+    )
+    session_token: str = Field(
+        default_factory=lambda: os.environ.get("SAHER_SESSION_TOKEN", "") or secrets.token_urlsafe(32)
+    )
+
+    # Durable Processing Engine & Worker settings
+    enable_background_worker: bool = Field(
+        default_factory=lambda: os.environ.get("SAHER_ENABLE_BACKGROUND_WORKER", "true").lower() in ("1", "true", "yes")
+    )
+    resource_mode: str = Field(
+        default_factory=lambda: os.environ.get("SAHER_RESOURCE_MODE", "Balanced")
+    )
+    worker_concurrency: int = Field(
+        default_factory=lambda: int(os.environ.get("SAHER_WORKER_CONCURRENCY", "2"))
+    )
+    job_lease_seconds: int = Field(
+        default_factory=lambda: int(os.environ.get("SAHER_JOB_LEASE_SECONDS", "30"))
+    )
+    job_timeout_seconds: int = Field(
+        default_factory=lambda: int(os.environ.get("SAHER_JOB_TIMEOUT_SECONDS", "60"))
+    )
+    job_max_retries: int = Field(
+        default_factory=lambda: int(os.environ.get("SAHER_JOB_MAX_RETRIES", "3"))
+    )
+    worker_poll_interval_seconds: float = Field(
+        default_factory=lambda: float(os.environ.get("SAHER_WORKER_POLL_SECONDS", "0.35"))
+    )
 
     def ensure_dirs(self) -> None:
         os.makedirs(self.data_dir, exist_ok=True)
         os.makedirs(self.storage_dir, exist_ok=True)
+        os.makedirs(self.backup_dir, exist_ok=True)
+
 
 settings = Settings()
 settings.ensure_dirs()

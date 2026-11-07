@@ -5,17 +5,19 @@ import zlib
 import struct
 import hashlib
 import sqlite3
-from typing import List, Optional, BinaryIO, AsyncIterator
+from typing import List, Optional, AsyncIterator
 from services.api.config import settings
 from services.api.database import get_db
 from services.api.schemas import FileItemDTO, StatsDTO
+from services.api.migrations import LEGACY_SEED_TITLES, LegacyMigrationManager
 from services.ingestion.extractor import (
     sanitize_filename,
     validate_file_signature,
-    extract_document_content,
     normalize_persian_text,
     normalize_for_fts,
 )
+from services.worker.lifecycle import JobState
+from services.worker.queue import JobQueueRepository
 
 
 class IngestionValidationError(Exception):
@@ -95,9 +97,7 @@ def build_safe_fts_query(raw_query: str) -> str:
     if not raw_query or not raw_query.strip():
         return ""
     norm = normalize_persian_text(raw_query)
-    # Replace ZWNJ with regular space so each sub-token matches the expanded FTS index
     norm = norm.replace("\u200c", " ")
-    # Extract alphanumeric/word tokens only (safe against quotes, parens, *, :, -, OR/AND)
     tokens = re.findall(r"\w+", norm, flags=re.UNICODE)
     fts_reserved = {"AND", "OR", "NOT", "NEAR"}
     clean_tokens = [t for t in tokens if t.upper() not in fts_reserved]
@@ -123,16 +123,6 @@ def create_minimal_valid_png(rgb: tuple[int, int, int] = (235, 240, 238)) -> byt
         + make_chunk(b"IDAT", idat)
         + make_chunk(b"IEND", b"")
     )
-
-
-LEGACY_SEED_TITLES = {
-    "یادداشت‌های طراحی و معماری.txt",
-    "رنگ، فضا و زندگی روزمره.png",
-    "چطور بهتر یاد بگیریم؟.png",
-    "گزارش پژوهش‌های هوش مصنوعی.txt",
-    "سفر به جنگل‌های شمال.png",
-    "دست‌نوشته‌های جلسهٔ محصول.txt",
-}
 
 
 class ArchiveRepository:
@@ -217,8 +207,34 @@ class ArchiveRepository:
             file_size=r["file_size"],
             sha256=r["sha256"],
             text=r["extracted_text"] or "",
-            extraction_status=(r["extraction_status"] if "extraction_status" in keys and r["extraction_status"] else "extracted"),
-            extraction_method=(r["extraction_method"] if "extraction_method" in keys and r["extraction_method"] else "direct_text"),
+            extraction_status=(
+                r["extraction_status"]
+                if "extraction_status" in keys and r["extraction_status"]
+                else "extracted"
+            ),
+            extraction_method=(
+                r["extraction_method"]
+                if "extraction_method" in keys and r["extraction_method"]
+                else "direct_text"
+            ),
+            extraction_version=(
+                int(r["extraction_version"])
+                if "extraction_version" in keys and r["extraction_version"] is not None
+                else 1
+            ),
+            processing_version=(
+                int(r["processing_version"])
+                if "processing_version" in keys and r["processing_version"] is not None
+                else 1
+            ),
+            latest_job_id=(r["latest_job_id"] if "latest_job_id" in keys else None),
+            job_state=(r["job_state"] if "job_state" in keys else None),
+            processing_stage=(r["processing_stage"] if "processing_stage" in keys else None),
+            processing_progress=(
+                float(r["processing_progress"])
+                if "processing_progress" in keys and r["processing_progress"] is not None
+                else None
+            ),
             system_note=(r["system_note"] if "system_note" in keys else None),
             error_code=(r["error_code"] if "error_code" in keys else None),
             error_message=r["error_message"],
@@ -253,13 +269,16 @@ class ArchiveRepository:
                     SELECT f.id, f.archive_id, f.title, f.kind, f.topic, f.status,
                            f.mime_type, f.file_size, f.sha256, f.color_scheme,
                            f.error_code, f.error_message, f.is_user_modified,
+                           f.processing_version, f.latest_job_id,
                            f.created_at, f.updated_at,
                            d.extracted_text, d.page_count, d.extraction_status,
-                           d.extraction_method, d.system_note,
+                           d.extraction_method, d.extraction_version, d.system_note,
+                           j.state AS job_state, j.processing_stage, j.progress AS processing_progress,
                            snippet(files_fts, 1, '«', '»', '…', 20) AS matched_snippet
                     FROM files_fts
                     JOIN files f ON files_fts.file_id = f.id
                     LEFT JOIN documents d ON f.id = d.file_id
+                    LEFT JOIN jobs j ON f.latest_job_id = j.id
                     WHERE files_fts MATCH ?
                       AND f.archive_id = ?
                 """
@@ -285,11 +304,14 @@ class ArchiveRepository:
                     SELECT f.id, f.archive_id, f.title, f.kind, f.topic, f.status,
                            f.mime_type, f.file_size, f.sha256, f.color_scheme,
                            f.error_code, f.error_message, f.is_user_modified,
+                           f.processing_version, f.latest_job_id,
                            f.created_at, f.updated_at,
                            d.extracted_text, d.page_count, d.extraction_status,
-                           d.extraction_method, d.system_note
+                           d.extraction_method, d.extraction_version, d.system_note,
+                           j.state AS job_state, j.processing_stage, j.progress AS processing_progress
                     FROM files f
                     LEFT JOIN documents d ON f.id = d.file_id
+                    LEFT JOIN jobs j ON f.latest_job_id = j.id
                     WHERE f.archive_id = ?
                 """
                 params = [archive_id]
@@ -316,11 +338,14 @@ class ArchiveRepository:
                 SELECT f.id, f.archive_id, f.title, f.kind, f.topic, f.status,
                        f.mime_type, f.file_size, f.sha256, f.color_scheme,
                        f.error_code, f.error_message, f.is_user_modified,
+                       f.processing_version, f.latest_job_id,
                        f.created_at, f.updated_at,
                        d.extracted_text, d.page_count, d.extraction_status,
-                       d.extraction_method, d.system_note
+                       d.extraction_method, d.extraction_version, d.system_note,
+                       j.state AS job_state, j.processing_stage, j.progress AS processing_progress
                 FROM files f
                 LEFT JOIN documents d ON f.id = d.file_id
+                LEFT JOIN jobs j ON f.latest_job_id = j.id
                 WHERE f.id = ?
                 """,
                 (file_id,),
@@ -348,6 +373,20 @@ class ArchiveRepository:
             return path, row["mime_type"], row["title"]
 
     @classmethod
+    def _cleanup_failed_sync_ingest(cls, file_id: str, storage_path: str) -> None:
+        if storage_path and os.path.exists(storage_path):
+            try:
+                os.remove(storage_path)
+            except OSError:
+                pass
+        try:
+            with get_db() as conn:
+                conn.execute("DELETE FROM files_fts WHERE file_id = ?", (file_id,))
+                conn.execute("DELETE FROM files WHERE id = ?", (file_id,))
+        except Exception:
+            pass
+
+    @classmethod
     def _ingest_temp_file(
         cls,
         temp_path: str,
@@ -356,10 +395,15 @@ class ArchiveRepository:
         sha256_hash: str,
         archive_id: str = "default",
         custom_topic: Optional[str] = None,
+        async_mode: bool = False,
     ) -> FileItemDTO:
         """
-        Validates a written temporary file, checks duplicates, extracts text,
-        atomically moves to permanent storage, and persists in SQLite with full rollback cleanup.
+        1. Validates upload extension and binary signature.
+        2. Checks duplicate SHA-256.
+        3. Moves file to permanent storage.
+        4. Registers file metadata and creates a durable processing job in SQLite atomically.
+        5. If `async_mode=True`, notifies the independent background worker and returns immediately (`status='در صف'`).
+           If `async_mode=False` (backward-compatible synchronous mode), executes the durable job via the worker runner.
         """
         safe_title = sanitize_filename(raw_filename)
         ext = os.path.splitext(safe_title)[1].lower()
@@ -394,25 +438,15 @@ class ArchiveRepository:
                     sha256=sha256_hash,
                 )
 
-        # Run document text extraction on temp file
-        extraction = extract_document_content(temp_path, detected_mime, filename=safe_title)
-        if extraction.extraction_status == "failed":
-            raise IngestionValidationError(
-                extraction.error_message or "خطا در استخراج محتوای فایل.",
-                code=extraction.error_code or "EXTRACTION_FAILED",
-                status_code=422,
-            )
-
         file_id = str(uuid.uuid4())
         kind = detect_kind(detected_mime, safe_title)
         color = detect_color_scheme(kind, safe_title)
         topic = normalize_persian_text(custom_topic) if custom_topic else (
             "طراحی" if "طراحی" in safe_title else "کار"
         )
-        status = extraction.recommended_file_status
 
         default_tags: List[str] = []
-        if "هوش مصنوعی" in safe_title or "هوش مصنوعی" in extraction.extracted_text:
+        if "هوش مصنوعی" in safe_title:
             default_tags.append("هوش مصنوعی")
         if "طراحی" in safe_title or "معماری" in safe_title:
             default_tags.append("طراحی محصول")
@@ -426,7 +460,8 @@ class ArchiveRepository:
         except OSError as exc:
             raise StoragePersistenceError("امکان انتقال فایل به مخزن دائمی روی دیسک وجود ندارد.") from exc
 
-        # Persist to SQLite; if DB fails, remove final_storage_path so no orphan remains
+        # Register file, initial document placeholder, tags, and durable job in one atomic transaction
+        job_id: str = ""
         try:
             with get_db() as conn:
                 cur = conn.cursor()
@@ -434,8 +469,8 @@ class ArchiveRepository:
                     """
                     INSERT INTO files (
                         id, archive_id, title, kind, topic, status, mime_type,
-                        file_size, sha256, storage_path, color_scheme, error_code, error_message
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        file_size, sha256, storage_path, color_scheme, processing_version
+                    ) VALUES (?, ?, ?, ?, ?, 'در صف', ?, ?, ?, ?, ?, 1)
                     """,
                     (
                         file_id,
@@ -443,14 +478,11 @@ class ArchiveRepository:
                         safe_title,
                         kind,
                         topic,
-                        status,
                         detected_mime,
                         file_size,
                         sha256_hash,
                         final_storage_path,
                         color,
-                        extraction.error_code,
-                        extraction.error_message,
                     ),
                 )
 
@@ -459,62 +491,52 @@ class ArchiveRepository:
                     """
                     INSERT INTO documents (
                         id, file_id, extracted_text, page_count,
-                        extraction_status, extraction_method, system_note
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        extraction_status, extraction_method, extraction_version, system_note
+                    ) VALUES (?, ?, '', 1, 'queued', 'none', 0, 'در صف پردازش کارگر پس‌زمینه')
                     """,
-                    (
-                        doc_id,
-                        file_id,
-                        extraction.extracted_text,
-                        extraction.page_count,
-                        extraction.extraction_status,
-                        extraction.extraction_method,
-                        extraction.system_note,
-                    ),
+                    (doc_id, file_id),
                 )
-
-                for idx, page_text in enumerate(extraction.pages, start=1):
-                    cur.execute(
-                        """
-                        INSERT INTO pages (
-                            id, document_id, file_id, page_number, raw_text, normalized_text
-                        ) VALUES (?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            str(uuid.uuid4()),
-                            doc_id,
-                            file_id,
-                            idx,
-                            page_text,
-                            normalize_for_fts(page_text),
-                        ),
-                    )
 
                 cls.set_file_tags(conn, file_id, default_tags)
+                cls.update_fts(conn, file_id, safe_title, "", topic, default_tags)
 
-                # Index in FTS5 ONLY when extraction did not fail
-                cls.update_fts(
-                    conn,
-                    file_id,
-                    safe_title,
-                    extraction.extracted_text,
-                    topic,
-                    default_tags,
+                job_id = JobQueueRepository.create_job_in_transaction(
+                    conn=conn,
+                    file_id=file_id,
+                    archive_id=archive_id,
+                    processing_version=1,
+                    progress_message="فایل دریافت و در صف پردازش پایدار ثبت شد.",
                 )
-        except sqlite3.Error as exc:
-            if os.path.exists(final_storage_path):
-                try:
-                    os.remove(final_storage_path)
-                except OSError:
-                    pass
-            raise DatabasePersistenceError() from exc
         except Exception as exc:
-            if os.path.exists(final_storage_path):
-                try:
-                    os.remove(final_storage_path)
-                except OSError:
-                    pass
+            cls._cleanup_failed_sync_ingest(file_id, final_storage_path)
             raise DatabasePersistenceError() from exc
+
+        if async_mode:
+            from services.worker.runner import default_worker
+
+            if default_worker.is_running:
+                default_worker.notify()
+            res = cls.get_file(file_id)
+            if not res:
+                raise DatabasePersistenceError()
+            return res
+
+        # Backward-compatible synchronous mode: execute the durable job immediately via WorkerRunner
+        from services.worker.runner import default_worker
+
+        job_result = default_worker.process_one(specific_job_id=job_id)
+        if job_result and job_result.state == JobState.FAILED.value:
+            err_code = job_result.error_code or "EXTRACTION_FAILED"
+            err_msg = job_result.error_message or "خطا در استخراج محتوای فایل."
+            cls._cleanup_failed_sync_ingest(file_id, final_storage_path)
+            if err_code in ("DATABASE_LOCKED", "WORKER_EXECUTION_ERROR"):
+                raise DatabasePersistenceError()
+            raise IngestionValidationError(err_msg, code=err_code, status_code=422)
+
+        # If a transient retry was scheduled because of a simulated DB failure in synchronous mode, roll back cleanly
+        if job_result and job_result.state == JobState.QUEUED.value and job_result.attempt_count >= 1:
+            cls._cleanup_failed_sync_ingest(file_id, final_storage_path)
+            raise DatabasePersistenceError()
 
         res = cls.get_file(file_id)
         if not res:
@@ -528,6 +550,7 @@ class ArchiveRepository:
         chunk_iterator: AsyncIterator[bytes],
         archive_id: str = "default",
         custom_topic: Optional[str] = None,
+        async_mode: bool = False,
     ) -> FileItemDTO:
         """
         Streams an incoming upload to disk with bounded memory, computing SHA-256 on the fly
@@ -568,8 +591,15 @@ class ArchiveRepository:
                 sha256_hash=sha.hexdigest(),
                 archive_id=archive_id,
                 custom_topic=custom_topic,
+                async_mode=async_mode,
             )
-        except (IngestionValidationError, UploadTooLargeError, DuplicateFileError, StoragePersistenceError, DatabasePersistenceError):
+        except (
+            IngestionValidationError,
+            UploadTooLargeError,
+            DuplicateFileError,
+            StoragePersistenceError,
+            DatabasePersistenceError,
+        ):
             if os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
@@ -597,6 +627,7 @@ class ArchiveRepository:
         content: bytes,
         archive_id: str = "default",
         custom_topic: Optional[str] = None,
+        async_mode: bool = False,
     ) -> FileItemDTO:
         """Synchronous helper for importing in-memory bytes (used by tests and CLI tools)."""
         if len(content) == 0:
@@ -623,6 +654,7 @@ class ArchiveRepository:
                 sha256_hash=sha256_hash,
                 archive_id=archive_id,
                 custom_topic=custom_topic,
+                async_mode=async_mode,
             )
         except OSError as exc:
             raise StoragePersistenceError() from exc
@@ -694,55 +726,42 @@ class ArchiveRepository:
             )
             attention = cur.fetchone()[0]
 
+            cur.execute(
+                "SELECT COUNT(*) FROM jobs WHERE archive_id = ? AND state = 'QUEUED'",
+                (archive_id,),
+            )
+            queued_jobs = cur.fetchone()[0]
+
+            cur.execute(
+                "SELECT COUNT(*) FROM jobs WHERE archive_id = ? AND state = 'RUNNING'",
+                (archive_id,),
+            )
+            running_jobs = cur.fetchone()[0]
+
+            cur.execute(
+                "SELECT COUNT(*) FROM jobs WHERE archive_id = ? AND state = 'FAILED'",
+                (archive_id,),
+            )
+            failed_jobs = cur.fetchone()[0]
+
             return StatsDTO(
                 total_files=total,
                 ready_files=ready,
                 attention_files=attention,
+                queued_jobs=queued_jobs,
+                running_jobs=running_jobs,
+                failed_jobs=failed_jobs,
                 demo_mode=settings.demo_mode,
             )
 
     @classmethod
-    def purge_legacy_fake_seed_records(cls) -> int:
+    def purge_legacy_fake_seed_records(cls, confirm_approval: bool = False) -> int:
         """
-        Removes legacy auto-seeded demonstration records from earlier prototype versions
-        (specifically fake .png files containing plain text bytes, or an untouched initial 6-seed set)
-        while preserving all genuine user-imported files.
+        Safe migration wrapper: NEVER deletes files unless `confirm_approval=True` is explicitly provided.
+        When approved, delegates to `LegacyMigrationManager.execute_approved_cleanup` which creates
+        a verified backup and audit record before removing only unmodified legacy seed records.
         """
-        removed = 0
-        with get_db() as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT id, title, mime_type, storage_path, is_user_modified FROM files")
-            rows = cur.fetchall()
-            if not rows:
-                return 0
-
-            # Check if the entire database consists solely of untouched legacy auto-seeds
-            all_legacy_unmodified = (
-                len(rows) <= 6
-                and all(r["title"] in LEGACY_SEED_TITLES and not r["is_user_modified"] for r in rows)
-            )
-
-            for r in rows:
-                file_id = r["id"]
-                path = r["storage_path"]
-                is_fake_png = False
-                if r["mime_type"] == "image/png" and path and os.path.exists(path):
-                    try:
-                        with open(path, "rb") as f:
-                            sig = f.read(8)
-                        if sig != b"\x89PNG\r\n\x1a\n":
-                            is_fake_png = True
-                    except OSError:
-                        pass
-
-                should_remove = is_fake_png or (all_legacy_unmodified and not settings.demo_mode)
-                if should_remove:
-                    cur.execute("DELETE FROM files_fts WHERE file_id = ?", (file_id,))
-                    cur.execute("DELETE FROM files WHERE id = ?", (file_id,))
-                    if path and os.path.exists(path):
-                        try:
-                            os.remove(path)
-                        except OSError:
-                            pass
-                    removed += 1
-        return removed
+        if not confirm_approval:
+            return 0
+        res = LegacyMigrationManager.execute_approved_cleanup(confirm_approval=True)
+        return res.removed_count

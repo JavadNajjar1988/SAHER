@@ -8,6 +8,7 @@ interface FileDetailModalProps {
   onUpdate: (fileId: string, payload: FileUpdatePayload) => Promise<void>;
   onAddTag: (fileId: string, tag: string) => Promise<void>;
   onRemoveTag: (fileId: string, tag: string) => Promise<void>;
+  onReanalyze?: (fileId: string, stage?: string) => Promise<string>;
   isDemoMode?: boolean;
 }
 
@@ -17,11 +18,14 @@ export function FileDetailModal({
   onUpdate,
   onAddTag,
   onRemoveTag,
+  onReanalyze,
   isDemoMode = false,
 }: FileDetailModalProps) {
   const [topicDraft, setTopicDraft] = useState(selected.topic);
   const [tagInput, setTagInput] = useState("");
+  const [targetStage, setTargetStage] = useState<string>("");
   const [saving, setSaving] = useState(false);
+  const [reanalyzing, setReanalyzing] = useState(false);
   const [notice, setNotice] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
 
@@ -63,9 +67,25 @@ export function FileDetailModal({
     }
   };
 
+  const handleTriggerReanalyze = async () => {
+    if (!onReanalyze || isDemoMode) return;
+    setNotice("");
+    setErrorMsg("");
+    setReanalyzing(true);
+    try {
+      const msg = await onReanalyze(selected.id, targetStage || undefined);
+      setNotice(msg || "کار بازپردازش فایل در صف پردازش پایدار ثبت شد.");
+    } catch (err: any) {
+      setErrorMsg(err?.message || "خطا در ثبت درخواست بازپردازش فایل.");
+    } finally {
+      setReanalyzing(false);
+    }
+  };
+
   const extractionStatusLabel: Record<string, string> = {
     extracted: "استخراج مستقیم متن انجام شده",
     pending_ocr: "در انتظار OCR / تحلیل دیداری (بدون لایه متنی)",
+    queued: "در صف استخراج کارگر پس‌زمینه",
     empty: "فاقد متن قابل استخراج",
     unsupported: "فرمت فاقد استخراج متنی",
     failed: "خطا در استخراج متن",
@@ -96,7 +116,7 @@ export function FileDetailModal({
         <div className={`preview large ${selected.color}`}>
           <Preview item={selected} />
         </div>
-        <div className="filemeta-row" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+        <div className="filemeta-row">
           <span className={`status ${selected.status === "آماده" ? "ready" : "attention"}`}>
             {selected.status === "آماده" ? "●" : "◌"} {selected.status}
           </span>
@@ -105,9 +125,10 @@ export function FileDetailModal({
               ✓ اصلاح‌شده توسط کاربر
             </span>
           )}
-          <span className="filesize-tag">
+          <span className="filesize-tag tabular-nums">
             حجم: {Math.max(1, Math.round(selected.file_size / 1024)).toLocaleString("fa-IR")} کیلوبایت ·{" "}
-            {selected.page_count.toLocaleString("fa-IR")} صفحه
+            {selected.page_count.toLocaleString("fa-IR")} صفحه · نسخه پردازش:{" "}
+            {(selected.processing_version ?? 1).toLocaleString("fa-IR")}
           </span>
           <span className="sha-tag" dir="ltr" title={selected.sha256}>
             SHA-256: {selected.sha256.substring(0, 12)}…
@@ -116,7 +137,7 @@ export function FileDetailModal({
 
         <h3>
           متن استخراج‌شده ·{" "}
-          <small style={{ fontWeight: "normal" }}>
+          <small>
             {extractionStatusLabel[selected.extraction_status] || selected.extraction_status}
           </small>
         </h3>
@@ -128,12 +149,14 @@ export function FileDetailModal({
           <div className="evidence" data-testid="no-extracted-text-notice">
             {selected.extraction_status === "pending_ocr"
               ? "متنی از این فایل استخراج نشده است. این فایل نیازمند اجرای موتور OCR یا تحلیلگر دیداری آفلاین در مایلستون بعدی است."
-              : "محتوای متنی در این فایل وجود ندارد."}
+              : selected.extraction_status === "queued"
+                ? "فایل در صف پردازش پس‌زمینه قرار دارد و به‌زودی استخراج می‌شود."
+                : "محتوای متنی در این فایل وجود ندارد."}
           </div>
         )}
 
         {selected.system_note && (
-          <div className="evidence" style={{ marginTop: "0.5rem" }}>
+          <div className="evidence">
             <strong>یادداشت سیستم:</strong> {selected.system_note}
           </div>
         )}
@@ -212,10 +235,26 @@ export function FileDetailModal({
         </form>
 
         {selected.error_message && (
-          <div className="evidence" role="alert" style={{ borderColor: "#e05a47", color: "#a82010" }}>
+          <div className="evidence error-evidence" role="alert">
             گزارش خطای استخراج: {selected.error_message}
           </div>
         )}
+
+        <h3>بازپردازش کنترل‌شده (مایلستون ۲)</h3>
+        <div className="reanalyze-row">
+          <select
+            aria-label="مرحله بازپردازش"
+            value={targetStage}
+            disabled={reanalyzing || isDemoMode}
+            onChange={(e) => setTargetStage(e.target.value)}
+          >
+            <option value="">همهٔ مراحل (تحلیل و استخراج کامل)</option>
+            <option value="VALIDATION">از مرحلهٔ اعتبارسنجی باینری (VALIDATION)</option>
+            <option value="EXTRACTION">از مرحلهٔ استخراج متن (EXTRACTION)</option>
+            <option value="OCR_PENDING">بررسی وضعیت انتظار OCR (OCR_PENDING)</option>
+            <option value="INDEXING">بازسازی نمایهٔ جست‌وجو (INDEXING)</option>
+          </select>
+        </div>
 
         <div className="actions">
           <button
@@ -226,20 +265,26 @@ export function FileDetailModal({
             {saving ? "در حال ثبت…" : "تأیید و ثبت اصلاح"}
           </button>
           <button
-            disabled={true}
-            title="صف پردازش پس‌زمینه (Worker) در مایلستون ۲ فعال می‌شود"
-            style={{ opacity: 0.55, cursor: "not-allowed" }}
+            type="button"
+            data-testid="reanalyze-file-button"
+            disabled={reanalyzing || isDemoMode || !onReanalyze}
+            title={
+              isDemoMode
+                ? "بازپردازش فقط در حالت متصل به بک‌اند فعال است"
+                : "ارسال فایل به صف پردازش پایدار بدون حذف ویرایش‌های دستی شما"
+            }
+            onClick={handleTriggerReanalyze}
           >
-            پردازش دوباره (در مایلستون ۲)
+            {reanalyzing ? "در حال ثبت در صف…" : "↻ پردازش دوباره"}
           </button>
         </div>
         {notice && (
-          <p role="status" style={{ color: "#1d6b48", fontWeight: 500 }}>
+          <p role="status" className="modal-notice">
             {notice}
           </p>
         )}
         {errorMsg && (
-          <p role="alert" style={{ color: "#b00020", fontWeight: 500 }}>
+          <p role="alert" className="modal-error">
             {errorMsg}
           </p>
         )}
