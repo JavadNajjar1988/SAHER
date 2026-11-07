@@ -1,8 +1,17 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
-import { FileItem, StatsResponse } from "./types/archive";
-import { ArchiveApiClient } from "./services/apiClient";
+import {
+  FileItem,
+  StatsResponse,
+  ConnectionMode,
+  FileUpdatePayload,
+} from "./types/archive";
+import {
+  ArchiveApiClient,
+  EXPLICIT_DEMO_SAMPLES,
+  LegacyBrowserDataHelper,
+} from "./services/apiClient";
 import { Sidebar } from "./components/Sidebar";
 import { Preview } from "./components/Preview";
 import { FileDetailModal } from "./components/FileDetailModal";
@@ -12,7 +21,17 @@ const digits = (value: number) => value.toLocaleString("fa-IR");
 
 function App() {
   const [items, setItems] = useState<FileItem[]>([]);
-  const [stats, setStats] = useState<StatsResponse>({ total_files: 0, ready_files: 0, attention_files: 0 });
+  const [stats, setStats] = useState<StatsResponse>({
+    total_files: 0,
+    ready_files: 0,
+    attention_files: 0,
+  });
+  const [connectionMode, setConnectionMode] = useState<ConnectionMode>("checking");
+  const [backendVersion, setBackendVersion] = useState<string | undefined>(undefined);
+  const [maxUploadBytes, setMaxUploadBytes] = useState<number>(25 * 1024 * 1024);
+  const [apiErrorBanner, setApiErrorBanner] = useState<string>("");
+
+  const [demoItems, setDemoItems] = useState<FileItem[]>(EXPLICIT_DEMO_SAMPLES);
   const [page, setPage] = useState("کتابخانه");
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState("همهٔ فایل‌ها");
@@ -21,26 +40,68 @@ function App() {
   const [adding, setAdding] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Load files and stats from API / Local Persistence
-  const refreshData = useCallback(async () => {
+  const loadFromBackend = useCallback(async () => {
     setLoading(true);
+    setApiErrorBanner("");
     try {
+      const health = await ArchiveApiClient.checkHealth();
+      setBackendVersion(health.version);
+      if (health.max_upload_size_bytes) {
+        setMaxUploadBytes(health.max_upload_size_bytes);
+      }
+
+      const statusFilter = page === "بازبینی" ? "نیازمند بازبینی" : undefined;
       const [fetchedFiles, fetchedStats] = await Promise.all([
-        ArchiveApiClient.listFiles(kind, query, page === "بازبینی" ? "نیازمند بازبینی" : undefined),
-        ArchiveApiClient.getStats()
+        ArchiveApiClient.listFiles(kind, query, statusFilter),
+        ArchiveApiClient.getStats(),
       ]);
       setItems(fetchedFiles);
       setStats(fetchedStats);
-    } catch (e) {
-      console.error("Failed to load archive data", e);
+      setConnectionMode("connected");
+    } catch (err: any) {
+      setConnectionMode("disconnected");
+      setApiErrorBanner(
+        err?.message ||
+          "ارتباط با سرویس محلی ساهر (FastAPI) برقرار نشد. عملیات آرشیو تا زمان اتصال مجدد غیرفعال است.",
+      );
     } finally {
       setLoading(false);
     }
   }, [kind, query, page]);
 
+  const loadDemoData = useCallback(() => {
+    let filtered = [...demoItems];
+    if (kind && kind !== "همهٔ فایل‌ها") {
+      filtered = filtered.filter((f) => f.kind === kind);
+    }
+    if (page === "بازبینی") {
+      filtered = filtered.filter((f) => f.status === "نیازمند بازبینی");
+    }
+    if (query.trim()) {
+      const q = query.trim().toLowerCase();
+      filtered = filtered.filter(
+        (f) =>
+          f.title.toLowerCase().includes(q) ||
+          f.text.toLowerCase().includes(q) ||
+          f.tags.some((t) => t.toLowerCase().includes(q)),
+      );
+    }
+    setItems(filtered);
+    setStats({
+      total_files: demoItems.length,
+      ready_files: demoItems.filter((i) => i.status === "آماده").length,
+      attention_files: demoItems.filter((i) => i.status !== "آماده").length,
+      demo_mode: true,
+    });
+  }, [demoItems, kind, query, page]);
+
   useEffect(() => {
-    refreshData();
-  }, [refreshData]);
+    if (connectionMode === "demo") {
+      loadDemoData();
+    } else {
+      loadFromBackend();
+    }
+  }, [connectionMode, loadFromBackend, loadDemoData]);
 
   // Modal accessibility & focus management
   const modalOpen = selected !== null || adding;
@@ -53,7 +114,7 @@ function App() {
     const focusable = () =>
       Array.from(
         dialog?.querySelectorAll<HTMLElement>(
-          "button, input, select, [href]",
+          "button:not([disabled]), input:not([disabled]), select:not([disabled]), [href]",
         ) ?? [],
       );
     focusable()[0]?.focus();
@@ -83,45 +144,73 @@ function App() {
     };
   }, [modalOpen]);
 
-  // Update file handler
-  const handleUpdate = async (updated: FileItem) => {
-    try {
-      await ArchiveApiClient.updateFile(updated.id, {
-        topic: updated.topic,
-        status: updated.status,
-        tags: updated.tags
-      });
-      setSelected(updated);
-      await refreshData();
-    } catch (err) {
-      console.error("Failed to update file", err);
+  const handleUpdateFile = async (fileId: string, payload: FileUpdatePayload) => {
+    if (connectionMode === "demo") {
+      setDemoItems((prev) =>
+        prev.map((item) => {
+          if (item.id !== fileId) return item;
+          const updated: FileItem = {
+            ...item,
+            topic: payload.topic ?? item.topic,
+            status: payload.status ?? item.status,
+            tags: payload.tags ?? item.tags,
+            is_user_modified: true,
+          };
+          setSelected(updated);
+          return updated;
+        }),
+      );
+      return;
     }
+
+    const updated = await ArchiveApiClient.updateFile(fileId, payload);
+    setSelected(updated);
+    await loadFromBackend();
   };
 
   const handleAddTag = async (fileId: string, tag: string) => {
-    const updated = await ArchiveApiClient.addTag(fileId, tag);
-    if (updated) {
-      setSelected(updated);
-      await refreshData();
+    if (connectionMode === "demo") {
+      const target = demoItems.find((i) => i.id === fileId);
+      if (!target) return;
+      await handleUpdateFile(fileId, {
+        tags: Array.from(new Set([...target.tags, tag])),
+      });
+      return;
     }
+
+    const updated = await ArchiveApiClient.addTag(fileId, tag);
+    setSelected(updated);
+    await loadFromBackend();
   };
 
   const handleRemoveTag = async (fileId: string, tag: string) => {
-    const updated = await ArchiveApiClient.removeTag(fileId, tag);
-    if (updated) {
-      setSelected(updated);
-      await refreshData();
+    if (connectionMode === "demo") {
+      const target = demoItems.find((i) => i.id === fileId);
+      if (!target) return;
+      await handleUpdateFile(fileId, {
+        tags: target.tags.filter((t) => t !== tag),
+      });
+      return;
     }
+
+    const updated = await ArchiveApiClient.removeTag(fileId, tag);
+    setSelected(updated);
+    await loadFromBackend();
   };
 
-  // Import handler
-  const handleImportFiles = async (files: FileList) => {
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      await ArchiveApiClient.importFile(file);
+  const handleImportFiles = async (files: FileList, topic?: string) => {
+    if (connectionMode === "demo") {
+      throw new Error(
+        "در حالت نمایشی امکان ذخیره‌سازی واقعی فایل وجود ندارد. لطفاً ابتدا به حالت آرشیو اصلی (متصل به بک‌اند) بازگردید.",
+      );
     }
-    await refreshData();
+    for (let i = 0; i < files.length; i++) {
+      await ArchiveApiClient.importFile(files[i], topic);
+    }
+    await loadFromBackend();
   };
+
+  const legacyBrowserEntries = LegacyBrowserDataHelper.getLegacyUserEntries();
 
   return (
     <div className="shell">
@@ -131,25 +220,142 @@ function App() {
         setQuery={setQuery}
         attentionCount={stats.attention_files}
         digits={digits}
+        connectionMode={connectionMode}
+        backendVersion={backendVersion}
       />
       <main>
         <header>
           <span>
-            فضای شخصی <span className="crumb">/</span> {page}
+            {connectionMode === "demo" ? "فضای نمایشی آزمایشی" : "فضای شخصی"}{" "}
+            <span className="crumb">/</span> {page}
           </span>
           <div className="headerleft">
+            {connectionMode === "demo" && (
+              <button
+                onClick={() => setConnectionMode("checking")}
+                style={{
+                  background: "#132d31",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: "6px",
+                  padding: "0.35rem 0.75rem",
+                  cursor: "pointer",
+                  fontSize: "0.82rem",
+                }}
+              >
+                بازگشت به آرشیو اصلی (SQLite)
+              </button>
+            )}
             <span className="privacy">◈ حریم خصوصی، پیش‌فرض ماست</span>
             <span className="avatar small">م</span>
           </div>
         </header>
         <div className="content">
+          {connectionMode === "disconnected" && (
+            <div
+              role="alert"
+              data-testid="backend-disconnected-banner"
+              style={{
+                background: "#fdecea",
+                border: "1px solid #f5c2c0",
+                color: "#8a1c14",
+                borderRadius: "12px",
+                padding: "1rem 1.25rem",
+                marginBottom: "1.25rem",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: "1rem",
+                flexWrap: "wrap",
+              }}
+            >
+              <div>
+                <strong>خطا در ارتباط با سرویس محلی ساهر (FastAPI):</strong>{" "}
+                {apiErrorBanner}
+              </div>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                  onClick={() => loadFromBackend()}
+                  style={{
+                    background: "#8a1c14",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: "8px",
+                    padding: "0.45rem 0.9rem",
+                    cursor: "pointer",
+                  }}
+                >
+                  تلاش مجدد برای اتصال
+                </button>
+                <button
+                  onClick={() => setConnectionMode("demo")}
+                  style={{
+                    background: "transparent",
+                    color: "#8a1c14",
+                    border: "1px solid #8a1c14",
+                    borderRadius: "8px",
+                    padding: "0.45rem 0.9rem",
+                    cursor: "pointer",
+                  }}
+                >
+                  ورود به حالت نمایشی مجزا
+                </button>
+              </div>
+            </div>
+          )}
+
+          {connectionMode === "demo" && (
+            <div
+              role="status"
+              data-testid="demo-mode-banner"
+              style={{
+                background: "#fff8e6",
+                border: "1px solid #f0d890",
+                color: "#6e4e00",
+                borderRadius: "12px",
+                padding: "0.85rem 1.25rem",
+                marginBottom: "1.25rem",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: "1rem",
+              }}
+            >
+              <span>
+                <strong>حالت نمایشی فعال است:</strong> رکوردهای این نما صرفاً نمونهٔ رابط کاربری هستند و در پایگاه‌داده SQLite ذخیره نمی‌شوند.
+              </span>
+              <button
+                onClick={() => setConnectionMode("checking")}
+                style={{
+                  background: "#6e4e00",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: "8px",
+                  padding: "0.4rem 0.85rem",
+                  cursor: "pointer",
+                }}
+              >
+                اتصال به آرشیو واقعی
+              </button>
+            </div>
+          )}
+
           <section className="heading">
             <div>
               <div className="eyebrow">هر چیزی، در جای خودش</div>
               <h1>{page === "کتابخانه" ? "کتابخانهٔ من" : page}</h1>
               <p>اینجا جایی برای نگه‌داشتن، پیدا کردن و دوباره کشف کردن است.</p>
             </div>
-            <button className="primary" onClick={() => setAdding(true)}>
+            <button
+              className="primary"
+              disabled={connectionMode !== "connected"}
+              title={
+                connectionMode !== "connected"
+                  ? "واردسازی فایل فقط در حالت متصل به سرویس محلی FastAPI امکان‌پذیر است"
+                  : "افزودن فایل جدید به آرشیو محلی"
+              }
+              onClick={() => setAdding(true)}
+            >
               <span>＋</span> افزودن فایل
             </button>
           </section>
@@ -180,7 +386,7 @@ function App() {
                 <small>نیازمند توجه شما</small>
                 <strong>
                   {digits(stats.attention_files)}
-                  <em>بازبینی و تحلیل ناقص</em>
+                  <em>بازبینی و در صف</em>
                 </strong>
               </div>
             </div>
@@ -211,7 +417,9 @@ function App() {
                   onChange={(e) => setKind(e.target.value)}
                 >
                   {["همهٔ فایل‌ها", "سند", "تصویر", "اسکرین‌شات"].map((k) => (
-                    <option key={k}>{k}</option>
+                    <option key={k} value={k}>
+                      {k}
+                    </option>
                   ))}
                 </select>
                 <div className="viewtoggle">
@@ -233,10 +441,16 @@ function App() {
               </section>
               <div className="sectionline">
                 <h2>
-                  {query ? "نتیجهٔ جست‌وجو" : "آخرین فایل‌های شما"}{" "}
+                  {query ? "نتیجهٔ جست‌وجو" : "فایل‌های آرشیو"}{" "}
                   <span>{digits(items.length)} فایل</span>
                 </h2>
-                <span>{loading ? "در حال دریافت اطلاعات..." : "پایگاه‌داده محلی ساهر"}</span>
+                <span>
+                  {loading
+                    ? "در حال دریافت از سرویس محلی…"
+                    : connectionMode === "demo"
+                      ? "نمایش داده‌های نمونه (مجزا از آرشیو اصلی)"
+                      : "پایگاه‌داده پایدار SQLite + FTS5"}
+                </span>
               </div>
               <section className={`files ${view}`}>
                 {items.map((item) => (
@@ -256,10 +470,24 @@ function App() {
                         {item.status === "آماده" ? "●" : "◌"} {item.status}
                       </span>
                       <h3>{item.title}</h3>
+                      {item.matched_snippet && (
+                        <p
+                          style={{
+                            fontSize: "0.82rem",
+                            color: "#4a6266",
+                            margin: "0.25rem 0",
+                            lineHeight: 1.5,
+                          }}
+                        >
+                          {item.matched_snippet}
+                        </p>
+                      )}
                       <div className="cardmeta">
                         <span>{item.topic}</span>
                         <span>
-                          {item.created_at ? new Date(item.created_at).toLocaleDateString("fa-IR") : "امروز"}
+                          {item.created_at
+                            ? new Date(item.created_at).toLocaleDateString("fa-IR")
+                            : "امروز"}
                         </span>
                       </div>
                     </div>
@@ -267,16 +495,35 @@ function App() {
                 ))}
               </section>
               {!items.length && !loading && (
-                <div className="empty">
-                  فایلی با این مشخصات پیدا نشد.
-                  <button
-                    onClick={() => {
-                      setQuery("");
-                      setKind("همهٔ فایل‌ها");
-                    }}
-                  >
-                    پاک کردن فیلترها
-                  </button>
+                <div className="empty" data-testid="empty-archive-state">
+                  {query || kind !== "همهٔ فایل‌ها" || page === "بازبینی" ? (
+                    <>
+                      فایلی با این مشخصات در آرشیو پیدا نشد.
+                      <button
+                        onClick={() => {
+                          setQuery("");
+                          setKind("همهٔ فایل‌ها");
+                          if (page === "بازبینی") setPage("کتابخانه");
+                        }}
+                      >
+                        پاک کردن فیلترها
+                      </button>
+                    </>
+                  ) : connectionMode === "connected" ? (
+                    <>
+                      آرشیو شخصی شما در حال حاضر خالی است. نخستین سند یا تصویر خود را وارد کنید یا برای مشاهدهٔ نمونه‌ها وارد حالت نمایشی شوید.
+                      <div style={{ display: "flex", gap: "0.75rem", justifyContent: "center", marginTop: "0.75rem" }}>
+                        <button onClick={() => setAdding(true)}>
+                          ＋ افزودن نخستین فایل
+                        </button>
+                        <button onClick={() => setConnectionMode("demo")}>
+                          مشاهدهٔ حالت نمایشی آزمایشی
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>ارتباط با سرویس بک‌اند برقرار نیست.</>
+                  )}
                 </div>
               )}
             </>
@@ -286,31 +533,54 @@ function App() {
               <h2>{page}</h2>
               <p>
                 {page === "صف پردازش"
-                  ? "صف پردازش پس‌زمینه برای استخراج فشرده، اجرای مدل دیداری Qwen2.5-VL و ساخت بردارهای معنایی در حال اتصال است."
+                  ? "موتور صف پردازش پایدار (SQLite Jobs + Background Workers) در مایلستون ۲ پیاده‌سازی می‌شود."
                   : page === "تنظیمات"
-                  ? "تنظیمات آرشیو آفلاین، مسیر ذخیره‌سازی پایگاه‌داده و مدیریت مدل‌های هوش مصنوعی محلی."
-                  : `این بخش در مرحلهٔ بعد پیاده‌سازی می‌شود. هم‌اکنون می‌توانید ذخیره‌سازی، جست‌وجوی متنی و استخراج اسناد را در بخش کتابخانه آزمایش کنید.`}
+                    ? "مدیریت حالت عملیاتی آرشیو محلی (متصل به پایگاه‌داده SQLite یا حالت نمایشی مجزا)."
+                    : `این بخش در مایلستون‌های بعدی فعال می‌شود. هم‌اکنون می‌توانید واردسازی فایل، استخراج متن و جست‌وجوی FTS5 را در کتابخانه بررسی کنید.`}
               </p>
               {page === "تنظیمات" && (
-                <button
-                  style={{ marginTop: "1rem" }}
-                  onClick={() => {
-                    ArchiveApiClient.resetFallbackStorage();
-                    refreshData();
-                    alert("داده‌های محلی به حالت اولیه بازنشانی شدند.");
-                  }}
-                >
-                  بازنشانی داده‌های نمونه
-                </button>
+                <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", justifyContent: "center", marginTop: "1rem" }}>
+                  <button
+                    onClick={() =>
+                      setConnectionMode(connectionMode === "demo" ? "checking" : "demo")
+                    }
+                  >
+                    {connectionMode === "demo"
+                      ? "بازگشت به حالت آرشیو اصلی (SQLite)"
+                      : "تغییر به حالت نمایشی آزمایشی"}
+                  </button>
+                  {legacyBrowserEntries.length > 0 && (
+                    <button
+                      onClick={() => {
+                        const blob = new Blob(
+                          [JSON.stringify(legacyBrowserEntries, null, 2)],
+                          { type: "application/json" },
+                        );
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = "saher-legacy-localstorage-export.json";
+                        a.click();
+                        URL.revokeObjectURL(url);
+                      }}
+                    >
+                      برون‌ریزی داده‌های قدیمی مرورگر ({digits(legacyBrowserEntries.length)} مورد)
+                    </button>
+                  )}
+                </div>
               )}
-              <button onClick={() => setPage("کتابخانه")}>
+              <button onClick={() => setPage("کتابخانه")} style={{ marginTop: "0.75rem" }}>
                 رفتن به کتابخانه
               </button>
             </section>
           )}
           <footer>
             <span>◈ محتوای شما، روی دستگاه شما</span>
-            <span>بایگانی محلی آفلاین ساهر · پایگاه‌داده پایدار SQLite FTS5</span>
+            <span>
+              {connectionMode === "demo"
+                ? "حالت نمایشی مجزا · بدون ذخیره‌سازی دیسک"
+                : "بایگانی محلی آفلاین ساهر · پایگاه‌داده پایدار SQLite FTS5"}
+            </span>
           </footer>
         </div>
       </main>
@@ -318,15 +588,17 @@ function App() {
         <FileDetailModal
           selected={selected}
           onClose={() => setSelected(null)}
-          onUpdate={handleUpdate}
+          onUpdate={handleUpdateFile}
           onAddTag={handleAddTag}
           onRemoveTag={handleRemoveTag}
+          isDemoMode={connectionMode === "demo"}
         />
       )}
       {adding && (
         <ImportDialog
           onClose={() => setAdding(false)}
           onImport={handleImportFiles}
+          maxUploadBytes={maxUploadBytes}
         />
       )}
     </div>

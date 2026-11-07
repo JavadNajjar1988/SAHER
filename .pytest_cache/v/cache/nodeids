@@ -1,6 +1,0 @@
-[
-  "tests/test_api.py::test_health_endpoint",
-  "tests/test_api.py::test_import_real_file_persistence_and_extraction",
-  "tests/test_api.py::test_initial_seed_and_stats",
-  "tests/test_api.py::test_list_and_search_files"
-]

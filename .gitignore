@@ -3,3 +3,18 @@ dist/
 *.log
 .playwright-cli/
 output/playwright/
+
+# Python & FastAPI runtime / cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Local SQLite database and archived user files (never commit user data)
+data/
+*.db
+*.db-wal
+*.db-shm

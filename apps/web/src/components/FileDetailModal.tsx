@@ -1,13 +1,14 @@
 import React, { useState } from "react";
-import { FileItem } from "../types/archive";
+import { FileItem, FileUpdatePayload } from "../types/archive";
 import { Preview } from "./Preview";
 
 interface FileDetailModalProps {
   selected: FileItem;
   onClose: () => void;
-  onUpdate: (item: FileItem) => void;
+  onUpdate: (fileId: string, payload: FileUpdatePayload) => Promise<void>;
   onAddTag: (fileId: string, tag: string) => Promise<void>;
   onRemoveTag: (fileId: string, tag: string) => Promise<void>;
+  isDemoMode?: boolean;
 }
 
 export function FileDetailModal({
@@ -16,9 +17,59 @@ export function FileDetailModal({
   onUpdate,
   onAddTag,
   onRemoveTag,
+  isDemoMode = false,
 }: FileDetailModalProps) {
+  const [topicDraft, setTopicDraft] = useState(selected.topic);
   const [tagInput, setTagInput] = useState("");
+  const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
+  const [errorMsg, setErrorMsg] = useState("");
+
+  const handleTopicChange = async (newTopic: string) => {
+    setTopicDraft(newTopic);
+    setNotice("");
+    setErrorMsg("");
+    setSaving(true);
+    try {
+      await onUpdate(selected.id, { topic: newTopic });
+      setNotice(
+        isDemoMode
+          ? "موضوع در حافظهٔ نمایشی تغییر کرد."
+          : "موضوع فایل در پایگاه‌داده SQLite ثبت شد.",
+      );
+    } catch (err: any) {
+      setTopicDraft(selected.topic);
+      setErrorMsg(err?.message || "خطا در ثبت موضوع فایل.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleConfirmReview = async () => {
+    setNotice("");
+    setErrorMsg("");
+    setSaving(true);
+    try {
+      await onUpdate(selected.id, { topic: topicDraft, status: "آماده" });
+      setNotice(
+        isDemoMode
+          ? "تأیید بازبینی در حالت نمایشی ثبت شد."
+          : "تأیید و اصلاحات شما در پایگاه‌داده SQLite با موفقیت ثبت شد.",
+      );
+    } catch (err: any) {
+      setErrorMsg(err?.message || "خطا در ثبت تأیید بازبینی.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const extractionStatusLabel: Record<string, string> = {
+    extracted: "استخراج مستقیم متن انجام شده",
+    pending_ocr: "در انتظار OCR / تحلیل دیداری (بدون لایه متنی)",
+    empty: "فاقد متن قابل استخراج",
+    unsupported: "فرمت فاقد استخراج متنی",
+    failed: "خطا در استخراج متن",
+  };
 
   return (
     <div className="overlay" onClick={onClose}>
@@ -45,39 +96,83 @@ export function FileDetailModal({
         <div className={`preview large ${selected.color}`}>
           <Preview item={selected} />
         </div>
-        <div className="filemeta-row">
+        <div className="filemeta-row" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
           <span className={`status ${selected.status === "آماده" ? "ready" : "attention"}`}>
             {selected.status === "آماده" ? "●" : "◌"} {selected.status}
           </span>
+          {selected.is_user_modified && (
+            <span className="status ready" title="این رکورد توسط کاربر بازبینی و ویرایش شده است">
+              ✓ اصلاح‌شده توسط کاربر
+            </span>
+          )}
           <span className="filesize-tag">
-            حجم: {Math.round(selected.file_size / 1024).toLocaleString("fa-IR")} کیلوبایت · {selected.page_count} صفحه
+            حجم: {Math.max(1, Math.round(selected.file_size / 1024)).toLocaleString("fa-IR")} کیلوبایت ·{" "}
+            {selected.page_count.toLocaleString("fa-IR")} صفحه
           </span>
-          <span className="sha-tag" title={selected.sha256}>
-            هش: {selected.sha256.substring(0, 10)}...
+          <span className="sha-tag" dir="ltr" title={selected.sha256}>
+            SHA-256: {selected.sha256.substring(0, 12)}…
           </span>
         </div>
-        <h3>متن استخراج‌شده · صفحهٔ ۱</h3>
-        <p className="extracted">{selected.text || "متنی در این فایل یافت نشد یا هنوز پردازش نشده است."}</p>
+
+        <h3>
+          متن استخراج‌شده ·{" "}
+          <small style={{ fontWeight: "normal" }}>
+            {extractionStatusLabel[selected.extraction_status] || selected.extraction_status}
+          </small>
+        </h3>
+        {selected.text ? (
+          <p className="extracted" data-testid="extracted-text-content">
+            {selected.text}
+          </p>
+        ) : (
+          <div className="evidence" data-testid="no-extracted-text-notice">
+            {selected.extraction_status === "pending_ocr"
+              ? "متنی از این فایل استخراج نشده است. این فایل نیازمند اجرای موتور OCR یا تحلیلگر دیداری آفلاین در مایلستون بعدی است."
+              : "محتوای متنی در این فایل وجود ندارد."}
+          </div>
+        )}
+
+        {selected.system_note && (
+          <div className="evidence" style={{ marginTop: "0.5rem" }}>
+            <strong>یادداشت سیستم:</strong> {selected.system_note}
+          </div>
+        )}
+
         <h3>موضوع پیشنهادی</h3>
         <select
           aria-label="موضوع فایل"
-          value={selected.topic}
-          onChange={(e) => onUpdate({ ...selected, topic: e.target.value })}
+          value={topicDraft}
+          disabled={saving}
+          onChange={(e) => handleTopicChange(e.target.value)}
         >
           {["طراحی", "معماری", "آموزش", "فناوری", "زندگی", "کار", "پژوهش"].map(
             (t) => (
-              <option key={t}>{t}</option>
+              <option key={t} value={t}>
+                {t}
+              </option>
             ),
           )}
         </select>
+
         <h3>برچسب‌ها</h3>
         <div className="tags">
           {selected.tags.map((t) => (
             <button
               key={t}
               title="حذف برچسب"
+              disabled={saving}
               onClick={async () => {
-                await onRemoveTag(selected.id, t);
+                setNotice("");
+                setErrorMsg("");
+                setSaving(true);
+                try {
+                  await onRemoveTag(selected.id, t);
+                  setNotice("برچسب حذف شد.");
+                } catch (err: any) {
+                  setErrorMsg(err?.message || "خطا در حذف برچسب.");
+                } finally {
+                  setSaving(false);
+                }
               }}
             >
               {t} ×
@@ -89,9 +184,18 @@ export function FileDetailModal({
           onSubmit={async (e) => {
             e.preventDefault();
             const val = tagInput.trim();
-            if (val && !selected.tags.includes(val)) {
+            if (!val || selected.tags.includes(val)) return;
+            setNotice("");
+            setErrorMsg("");
+            setSaving(true);
+            try {
               await onAddTag(selected.id, val);
               setTagInput("");
+              setNotice("برچسب جدید در پایگاه‌داده ثبت شد.");
+            } catch (err: any) {
+              setErrorMsg(err?.message || "خطا در افزودن برچسب.");
+            } finally {
+              setSaving(false);
             }
           }}
         >
@@ -99,35 +203,46 @@ export function FileDetailModal({
             aria-label="برچسب جدید"
             placeholder="برچسب جدید…"
             value={tagInput}
+            disabled={saving}
             onChange={(e) => setTagInput(e.target.value)}
           />
-          <button type="submit">افزودن</button>
+          <button type="submit" disabled={saving || !tagInput.trim()}>
+            افزودن
+          </button>
         </form>
-        <div className="evidence">
-          {selected.error_message
-            ? `گزارش خطا: ${selected.error_message}`
-            : "محتوای استخراج‌شده و متادیتا به‌صورت پایدار در پایگاه‌داده و فضای فایل محلی نگهداری می‌شوند."}
-        </div>
+
+        {selected.error_message && (
+          <div className="evidence" role="alert" style={{ borderColor: "#e05a47", color: "#a82010" }}>
+            گزارش خطای استخراج: {selected.error_message}
+          </div>
+        )}
+
         <div className="actions">
           <button
             className="primary"
-            onClick={() => {
-              onUpdate({ ...selected, status: "آماده" });
-              setNotice("تغییرات شما در پایگاه‌داده محلی با موفقیت ثبت شد.");
-            }}
+            disabled={saving}
+            onClick={handleConfirmReview}
           >
-            تأیید و ثبت اصلاح
+            {saving ? "در حال ثبت…" : "تأیید و ثبت اصلاح"}
           </button>
           <button
-            onClick={() => {
-              onUpdate({ ...selected, status: "در صف" });
-              setNotice("فایل برای پردازش مجدد صف‌بندی شد.");
-            }}
+            disabled={true}
+            title="صف پردازش پس‌زمینه (Worker) در مایلستون ۲ فعال می‌شود"
+            style={{ opacity: 0.55, cursor: "not-allowed" }}
           >
-            پردازش دوباره
+            پردازش دوباره (در مایلستون ۲)
           </button>
         </div>
-        {notice && <p role="status">{notice}</p>}
+        {notice && (
+          <p role="status" style={{ color: "#1d6b48", fontWeight: 500 }}>
+            {notice}
+          </p>
+        )}
+        {errorMsg && (
+          <p role="alert" style={{ color: "#b00020", fontWeight: 500 }}>
+            {errorMsg}
+          </p>
+        )}
       </section>
     </div>
   );

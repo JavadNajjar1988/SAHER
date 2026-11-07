@@ -6,9 +6,13 @@
     "apps/web"
   ],
   "scripts": {
-    "dev": "npm run dev --workspace=apps/web",
+    "dev": "sh -c 'PYTHONPATH=. python3 -m uvicorn services.api.main:app --host 127.0.0.1 --port 8000 >/tmp/saher-api.log 2>&1 & exec npm run dev --workspace=apps/web'",
+    "dev:api": "PYTHONPATH=. python3 -m uvicorn services.api.main:app --host 127.0.0.1 --port 8000",
+    "dev:web": "npm run dev --workspace=apps/web",
     "build": "npm run build --workspace=apps/web",
     "lint": "npm run build --workspace=apps/web",
+    "test:api": "PYTHONPATH=. python3 -m pytest -v tests/",
+    "test:web": "npx --yes tsx --test apps/web/src/services/apiClient.test.ts",
     "preview": "npm run preview --workspace=apps/web"
   }
 }
