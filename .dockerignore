@@ -1,0 +1,15 @@
+**
+!package.json
+!package-lock.json
+!apps/
+!apps/web/
+!apps/web/**
+apps/web/dist
+apps/web/node_modules
+!pyproject.toml
+!README.md
+!services/
+!services/**
+**/__pycache__
+!docker/
+!docker/nginx.conf

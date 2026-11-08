@@ -1,0 +1,38 @@
+services:
+  api:
+    image: saher-backend:local
+    build:
+      context: .
+      target: backend
+    environment:
+      SAHER_ENABLE_BACKGROUND_WORKER: "false"
+      SAHER_ALLOWED_ORIGINS: http://localhost:8730,http://127.0.0.1:8730
+    volumes:
+      - archive:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json, urllib.request; assert json.load(urllib.request.urlopen('http://127.0.0.1:8765/health'))['status'] == 'healthy'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  worker:
+    image: saher-backend:local
+    command: ["python", "-m", "services.worker.runner"]
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - archive:/app/data
+    restart: unless-stopped
+  web:
+    build:
+      context: .
+      target: web
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8730:80"
+    restart: unless-stopped
+volumes:
+  archive:
