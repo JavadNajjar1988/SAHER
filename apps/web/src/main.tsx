@@ -10,6 +10,7 @@ import {
   JobStats,
   WorkerInfo,
   ResourceMode,
+  OCREngineStatus,
   LegacyMigrationReport,
   LegacyMigrationResult,
 } from "./types/archive";
@@ -92,6 +93,8 @@ function App() {
     total: 0,
   });
   const [workers, setWorkers] = useState<WorkerInfo[]>([]);
+  const [workerOnline, setWorkerOnline] = useState<boolean>(true);
+  const [ocrStatus, setOcrStatus] = useState<OCREngineStatus | null>(null);
   const [resourceMode, setResourceMode] = useState<ResourceMode>("Balanced");
   const [workerConcurrency, setWorkerConcurrency] = useState<number>(2);
   const [jobStateFilter, setJobStateFilter] = useState<string>("ALL");
@@ -108,6 +111,7 @@ function App() {
   const [kind, setKind] = useState("همهٔ فایل‌ها");
   const [view, setView] = useState("grid");
   const [selected, setSelected] = useState<FileItem | null>(null);
+  const [selectedInitialPage, setSelectedInitialPage] = useState<number | null>(null);
   const [adding, setAdding] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -128,9 +132,10 @@ function App() {
       if (health.resource_mode) {
         setResourceMode(health.resource_mode);
       }
+      setWorkerOnline(health.worker_online ?? true);
 
       const statusFilter = page === "بازبینی" ? "نیازمند بازبینی" : undefined;
-      const [fetchedFiles, fetchedStats, fetchedJobs] = await Promise.all([
+      const [fetchedFiles, fetchedStats, fetchedJobs, fetchedOcr] = await Promise.all([
         ArchiveApiClient.listFiles(kind, query, statusFilter),
         ArchiveApiClient.getStats(),
         ArchiveApiClient.listJobs({
@@ -138,6 +143,7 @@ function App() {
           stage: jobStageFilter,
           limit: 100,
         }),
+        ArchiveApiClient.getOcrStatus().catch(() => null),
       ]);
       setItems(fetchedFiles);
       setStats(fetchedStats);
@@ -146,6 +152,9 @@ function App() {
       setWorkers(fetchedJobs.workers);
       setResourceMode(fetchedJobs.resource_mode);
       setWorkerConcurrency(fetchedJobs.worker_concurrency);
+      if (fetchedOcr) {
+        setOcrStatus(fetchedOcr);
+      }
       setConnectionMode("connected");
     } catch (err: any) {
       setConnectionMode("disconnected");
@@ -321,14 +330,18 @@ function App() {
     return resp.message;
   };
 
-  const handleOpenFileById = async (fileId: string) => {
+  const handleOpenFileById = async (fileId: string, pageNumber?: number) => {
     if (connectionMode === "demo") {
       const found = demoItems.find((d) => d.id === fileId);
-      if (found) setSelected(found);
+      if (found) {
+        setSelectedInitialPage(pageNumber || 1);
+        setSelected(found);
+      }
       return;
     }
     try {
       const f = await ArchiveApiClient.getFile(fileId);
+      setSelectedInitialPage(pageNumber || f.matched_page || 1);
       setSelected(f);
     } catch {
       // Ignore if file was removed
@@ -493,6 +506,8 @@ function App() {
               workers={workers}
               resourceMode={resourceMode}
               workerConcurrency={workerConcurrency}
+              workerOnline={workerOnline}
+              ocrStatus={ocrStatus}
               connectionMode={connectionMode}
               loading={loading}
               stateFilter={jobStateFilter}
@@ -604,18 +619,43 @@ function App() {
                       <button
                         className="filecard"
                         key={item.id}
-                        onClick={() => setSelected(item)}
+                        data-testid={`file-card-${item.id}`}
+                        onClick={() => {
+                          setSelectedInitialPage(item.matched_page || 1);
+                          setSelected(item);
+                        }}
                       >
                         <div className={`preview ${item.color}`}>
                           <Preview item={item} />
                           <span className="filekind">{item.kind}</span>
                         </div>
                         <div className="cardbody">
-                          <span
-                            className={`status ${item.status === "آماده" ? "ready" : "attention"}`}
-                          >
-                            {item.status === "آماده" ? "●" : "◌"} {item.status}
-                          </span>
+                          <div className="card-badges-row">
+                            <span
+                              className={`status ${item.status === "آماده" ? "ready" : "attention"}`}
+                            >
+                              {item.status === "آماده" ? "●" : "◌"} {item.status}
+                            </span>
+                            {item.matched_page != null && (
+                              <span
+                                className="matched-page-badge tabular-nums"
+                                data-testid={`matched-page-badge-${item.id}`}
+                              >
+                                ⌕ صفحهٔ {digits(item.matched_page)}
+                                {item.matched_pages && item.matched_pages.length > 1
+                                  ? ` (صفحات ${item.matched_pages.map(digits).join("، ")})`
+                                  : ""}
+                              </span>
+                            )}
+                            {item.failed_pages && item.failed_pages.length > 0 && (
+                              <span
+                                className="failed-page-badge tabular-nums"
+                                title="خطای خواندن در برخی صفحات"
+                              >
+                                ⚠ خطا در صفحهٔ {item.failed_pages.map(digits).join("، ")}
+                              </span>
+                            )}
+                          </div>
                           <h3>{item.title}</h3>
                           {item.matched_snippet && (
                             <p className="matched-snippet">
@@ -623,7 +663,9 @@ function App() {
                             </p>
                           )}
                           <div className="cardmeta">
-                            <span>{item.topic}</span>
+                            <span>
+                              {item.topic} · {digits(item.page_count || 1)} صفحه
+                            </span>
                             <span>
                               {item.created_at
                                 ? new Date(item.created_at).toLocaleDateString("fa-IR")
@@ -777,11 +819,20 @@ function App() {
       {selected && (
         <FileDetailModal
           selected={selected}
-          onClose={() => setSelected(null)}
+          initialPage={selectedInitialPage}
+          onClose={() => {
+            setSelected(null);
+            setSelectedInitialPage(null);
+          }}
           onUpdate={handleUpdateFile}
           onAddTag={handleAddTag}
           onRemoveTag={handleRemoveTag}
           onReanalyze={handleReanalyzeFile}
+          onPageUpdated={async (fileId) => {
+            const fresh = await ArchiveApiClient.getFile(fileId);
+            setSelected(fresh);
+            await loadFromBackend();
+          }}
           isDemoMode={connectionMode === "demo"}
         />
       )}

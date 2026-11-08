@@ -5,6 +5,7 @@ import {
   WorkerInfo,
   ResourceMode,
   ConnectionMode,
+  OCREngineStatus,
 } from "../types/archive";
 import { ArchiveApiClient } from "../services/apiClient";
 
@@ -14,6 +15,8 @@ interface ProcessingQueueViewProps {
   workers: WorkerInfo[];
   resourceMode: ResourceMode;
   workerConcurrency: number;
+  workerOnline?: boolean;
+  ocrStatus?: OCREngineStatus | null;
   connectionMode: ConnectionMode;
   loading: boolean;
   stateFilter: string;
@@ -21,7 +24,7 @@ interface ProcessingQueueViewProps {
   onStateFilterChange: (val: string) => void;
   onStageFilterChange: (val: string) => void;
   onRefresh: () => Promise<void>;
-  onOpenFileById: (fileId: string) => Promise<void>;
+  onOpenFileById: (fileId: string, pageNumber?: number) => Promise<void>;
   digits: (val: number) => string;
 }
 
@@ -38,10 +41,10 @@ const STAGE_LABELS: Record<string, string> = {
   DISCOVERY: "۱. کشف و بررسی فایل",
   VALIDATION: "۲. اعتبارسنجی باینری (SHA-256)",
   EXTRACTION: "۳. استخراج ساختار و متن",
-  OCR_PENDING: "۴. در انتظار OCR آفلاین (مایلستون ۳)",
-  ANALYSIS_PENDING: "۴. در انتظار تحلیل دیداری آفلاین (مایلستون ۴)",
-  INDEXING: "۴. نمایه‌سازی تمام‌متن (FTS5)",
-  FINALIZATION: "۵. نهایی‌سازی و ثبت نسخه",
+  OCR_PENDING: "۴. تشخیص متن آفلاین (OCR فارسی و انگلیسی)",
+  ANALYSIS_PENDING: "۴. در انتظار تحلیل دیداری آفلاین",
+  INDEXING: "۵. نمایه‌سازی تمام‌متن و صفحات (FTS5)",
+  FINALIZATION: "۶. نهایی‌سازی و ثبت نسخه",
 };
 
 const JOB_TYPE_LABELS: Record<string, string> = {
@@ -71,6 +74,8 @@ export function ProcessingQueueView({
   workers,
   resourceMode,
   workerConcurrency,
+  workerOnline = true,
+  ocrStatus,
   connectionMode,
   loading,
   stateFilter,
@@ -89,6 +94,7 @@ export function ProcessingQueueView({
 
   const isConnected = connectionMode === "connected";
   const onlineWorkers = workers.filter((w) => w.status === "ONLINE");
+  const effectiveWorkerOnline = isConnected && (workerOnline || onlineWorkers.length > 0);
 
   const runJobAction = async (
     jobId: string,
@@ -173,7 +179,9 @@ export function ProcessingQueueView({
         <div className="queue-kpi-card" data-testid="kpi-running-jobs">
           <small>در حال اجرا</small>
           <strong className="tabular-nums">{digits(jobStats.running)}</strong>
-          <span>کارگرهای فعال: {digits(onlineWorkers.length || (isConnected ? 1 : 0))}</span>
+          <span>
+            کارگرهای فعال: {digits(onlineWorkers.length || (effectiveWorkerOnline ? 1 : 0))}
+          </span>
         </div>
         <div className="queue-kpi-card" data-testid="kpi-completed-jobs">
           <small>تکمیل‌شده</small>
@@ -191,18 +199,37 @@ export function ProcessingQueueView({
         </div>
       </section>
 
-      {/* Worker Availability & Resource Mode Governance */}
+      {/* Worker Availability, Standalone Worker Heartbeat & Offline OCR Engine Status */}
       <section className="worker-resource-bar" aria-label="مدیریت منابع و کارگرهای پس‌زمینه">
         <div className="worker-meta">
           <strong>
             وضعیت موتور پردازش پس‌زمینه:{" "}
-            {isConnected ? "فعال و متصل به SQLite" : "حالت نمایشی (غیرمتصل)"}
+            {!isConnected
+              ? "حالت نمایشی (غیرمتصل)"
+              : effectiveWorkerOnline
+                ? "فعال و متصل به SQLite"
+                : "کارگر پس‌زمینه آفلاین است"}
           </strong>
           <p>
             هم‌زمانی فعلی: <span className="tabular-nums">{digits(workerConcurrency)}</span> کارگر ·
             حالت منابع: {RESOURCE_MODE_LABELS[resourceMode]?.title || resourceMode}
-            {onlineWorkers[0]?.worker_id ? ` · شناسه: ${onlineWorkers[0].worker_id}` : ""}
+            {onlineWorkers[0]?.worker_id ? ` · شناسه کارگر: ${onlineWorkers[0].worker_id}` : ""}
           </p>
+          {ocrStatus && (
+            <p className="ocr-engine-meta" data-testid="ocr-engine-status-line">
+              موتور تشخیص متن آفلاین (OCR):{" "}
+              {ocrStatus.ready ? (
+                <span>
+                  ✓ آماده ({ocrStatus.engine_version} · مدل‌های فعال:{" "}
+                  {ocrStatus.installed_languages.join("، ")})
+                </span>
+              ) : (
+                <span className="ocr-missing-warning">
+                  ⚠ خطا ({ocrStatus.error_code}): {ocrStatus.error_message}
+                </span>
+              )}
+            </p>
+          )}
         </div>
         <div className="resource-mode-group" role="group" aria-label="انتخاب حالت منابع پردازشی">
           {(["Eco", "Balanced", "Performance"] as ResourceMode[]).map((m) => (
@@ -265,7 +292,7 @@ export function ProcessingQueueView({
             <option value="DISCOVERY">کشف و بررسی فایل (DISCOVERY)</option>
             <option value="VALIDATION">اعتبارسنجی باینری (VALIDATION)</option>
             <option value="EXTRACTION">استخراج متن (EXTRACTION)</option>
-            <option value="OCR_PENDING">در انتظار OCR آفلاین (OCR_PENDING)</option>
+            <option value="OCR_PENDING">تشخیص متن آفلاین (OCR_PENDING)</option>
             <option value="ANALYSIS_PENDING">در انتظار تحلیل دیداری (ANALYSIS_PENDING)</option>
             <option value="INDEXING">نمایه‌سازی FTS5 (INDEXING)</option>
             <option value="FINALIZATION">نهایی‌سازی (FINALIZATION)</option>
@@ -306,6 +333,13 @@ export function ProcessingQueueView({
               isConnected &&
               (job.state === "COMPLETED" || job.state === "FAILED" || job.state === "CANCELLED");
             const isExpanded = expandedJob?.id === job.id;
+            const failedPages = Array.isArray(job.checkpoint?.failed_pages)
+              ? (job.checkpoint?.failed_pages as number[])
+              : [];
+            const ocrMs =
+              typeof job.checkpoint?.ocr_processing_ms === "number"
+                ? (job.checkpoint.ocr_processing_ms as number)
+                : null;
 
             return (
               <article
@@ -320,13 +354,21 @@ export function ProcessingQueueView({
                         {STATE_LABELS[job.state] || job.state}
                       </span>
                       <span aria-hidden="true">·</span>
-                      <span>{ STAGE_LABELS[job.processing_stage] || job.processing_stage }</span>
+                      <span>{STAGE_LABELS[job.processing_stage] || job.processing_stage}</span>
                       <span aria-hidden="true">·</span>
                       <span>{JOB_TYPE_LABELS[job.job_type] || job.job_type}</span>
                       <span aria-hidden="true">·</span>
                       <span className="tabular-nums">
                         تلاش {digits(job.attempt_count)} از {digits(job.max_retries)}
                       </span>
+                      {ocrMs != null && ocrMs > 0 && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span className="tabular-nums">
+                            زمان OCR: {digits(Math.round(ocrMs))} میلی‌ثانیه
+                          </span>
+                        </>
+                      )}
                     </div>
 
                     <h3>
@@ -341,6 +383,22 @@ export function ProcessingQueueView({
 
                     {job.progress_message && (
                       <p className="job-progress-note">{job.progress_message}</p>
+                    )}
+
+                    {failedPages.length > 0 && (
+                      <div className="job-error-box" role="alert">
+                        <strong>
+                          خطای خواندن در صفحهٔ {failedPages.map(digits).join("، ")}:
+                        </strong>{" "}
+                        سایر صفحات سالم فایل استخراج و نمایه‌سازی شدند.{" "}
+                        <button
+                          type="button"
+                          className="inline-page-jump-btn"
+                          onClick={() => onOpenFileById(job.file_id, failedPages[0])}
+                        >
+                          مشاهدهٔ صفحهٔ دارای خطا ←
+                        </button>
+                      </div>
                     )}
 
                     {job.error_message && (

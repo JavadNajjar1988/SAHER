@@ -3,7 +3,7 @@ from typing import List, Optional, AsyncIterator
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, Response
 from services.api.config import settings
 from services.api.database import init_db, get_db
 from services.api.migrations import LegacyMigrationManager
@@ -21,6 +21,9 @@ from services.api.schemas import (
     TagAddDTO,
     StatsDTO,
     HealthDTO,
+    PageItemDTO,
+    PageUpdateDTO,
+    OCREngineStatusDTO,
     JobItemDTO,
     JobListResponseDTO,
     ReanalyzeRequestDTO,
@@ -32,6 +35,8 @@ from services.api.schemas import (
     MigrationAuditItemDTO,
     SessionHandshakeDTO,
 )
+from services.ingestion.extractor import render_page_preview_png
+from services.ocr import get_ocr_engine
 from services.worker.queue import (
     JobQueueRepository,
     JobNotFoundError,
@@ -205,6 +210,22 @@ def health_check():
 
     storage_ok = os.path.exists(settings.storage_dir) and os.access(settings.storage_dir, os.W_OK)
     overall_status = "healthy" if (db_ok and storage_ok) else "degraded"
+
+    worker_online = default_worker.is_running
+    active_workers_count = 1 if default_worker.is_running else 0
+    eff_mode = default_worker.profile.mode
+    if db_ok:
+        try:
+            worker_online, active_workers_count, eff_mode, _ = JobQueueRepository.get_online_worker_summary(
+                in_process_running=default_worker.is_running,
+                in_process_mode=default_worker.profile.mode,
+                in_process_concurrency=default_worker.profile.concurrency,
+            )
+        except Exception:
+            pass
+
+    ocr_status = get_ocr_engine().inspect_status()
+
     return HealthDTO(
         status=overall_status,
         version=settings.app_version,
@@ -212,8 +233,29 @@ def health_check():
         storage_accessible=storage_ok,
         demo_mode=settings.demo_mode,
         max_upload_size_bytes=settings.max_upload_size_bytes,
-        worker_online=default_worker.is_running,
-        resource_mode=default_worker.profile.mode,
+        worker_online=worker_online,
+        active_workers_count=active_workers_count,
+        resource_mode=eff_mode,
+        ocr_ready=ocr_status.ready,
+        ocr_engine=ocr_status.engine_name,
+        ocr_languages=ocr_status.installed_languages,
+    )
+
+
+@app.get(f"{settings.api_prefix}/ocr/status", response_model=OCREngineStatusDTO)
+def get_ocr_status():
+    st = get_ocr_engine().inspect_status()
+    return OCREngineStatusDTO(
+        ready=st.ready,
+        engine_name=st.engine_name,
+        engine_version=st.engine_version,
+        model_dir=st.model_dir,
+        installed_languages=st.installed_languages,
+        required_languages=st.required_languages,
+        missing_languages=st.missing_languages,
+        offline_ready=st.offline_ready,
+        error_code=st.error_code,
+        error_message=st.error_message,
     )
 
 
@@ -276,6 +318,57 @@ def get_file_content(file_id: str):
         content_disposition_type="inline" if mime_type.startswith(("image/", "application/pdf", "text/")) else "attachment",
         headers=headers,
     )
+
+
+@app.get(f"{settings.api_prefix}/files/{{file_id}}/pages", response_model=List[PageItemDTO])
+def list_file_pages(file_id: str):
+    file_item = ArchiveRepository.get_file(file_id)
+    if not file_item:
+        raise HTTPException(status_code=404, detail="فایل مورد نظر در آرشیو یافت نشد.")
+    return ArchiveRepository.get_file_pages(file_id)
+
+
+@app.patch(f"{settings.api_prefix}/files/{{file_id}}/pages/{{page_number}}", response_model=PageItemDTO)
+def update_file_page_text(file_id: str, page_number: int, payload: PageUpdateDTO):
+    updated_page = ArchiveRepository.update_page_text(
+        file_id=file_id,
+        page_number=page_number,
+        raw_text=payload.raw_text,
+    )
+    if not updated_page:
+        raise HTTPException(status_code=404, detail="صفحه یا فایل مورد نظر یافت نشد.")
+    return updated_page
+
+
+@app.get(f"{settings.api_prefix}/files/{{file_id}}/pages/{{page_number}}/preview")
+def get_file_page_preview(file_id: str, page_number: int):
+    info = ArchiveRepository.get_file_storage_path(file_id)
+    if not info:
+        raise HTTPException(status_code=404, detail="فایل فیزیکی در مخزن یافت نشد.")
+    storage_path, mime_type, title = info
+    pages = ArchiveRepository.get_file_pages(file_id)
+    fallback_text = ""
+    for p in pages:
+        if p.page_number == page_number:
+            fallback_text = p.normalized_text or p.raw_text or p.error_message or ""
+            break
+    try:
+        png_bytes = render_page_preview_png(
+            file_path=storage_path,
+            mime_type=mime_type,
+            page_number=max(1, page_number),
+            fallback_text=fallback_text,
+            title=title,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"خطا در تولید پیش‌نمایش صفحهٔ {page_number}: {exc}") from exc
+
+    headers = {
+        "Content-Security-Policy": "default-src 'none'; img-src 'self' data:; sandbox",
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "no-cache",
+    }
+    return Response(content=png_bytes, media_type="image/png", headers=headers)
 
 
 @app.post(f"{settings.api_prefix}/files/import", response_model=FileItemDTO)
@@ -403,14 +496,19 @@ def list_jobs(
     )
     stats = JobQueueRepository.get_job_stats()
     workers = JobQueueRepository.list_workers()
+    _, _, eff_mode, eff_conc = JobQueueRepository.get_online_worker_summary(
+        in_process_running=default_worker.is_running,
+        in_process_mode=default_worker.profile.mode,
+        in_process_concurrency=default_worker.profile.concurrency,
+    )
     return JobListResponseDTO(
         total=total,
         limit=limit,
         offset=offset,
         stats=stats,
         workers=workers,
-        resource_mode=default_worker.profile.mode,
-        worker_concurrency=default_worker.profile.concurrency,
+        resource_mode=eff_mode,
+        worker_concurrency=eff_conc,
         items=items,
     )
 

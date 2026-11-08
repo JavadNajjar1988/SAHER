@@ -208,3 +208,87 @@ test("ArchiveApiClient lists durable jobs with filters and executes pause/resume
     globalThis.fetch = originalFetch;
   }
 });
+
+test("ArchiveApiClient supports Milestone 3 page-level OCR inspection, manual page edits, and preview URLs", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method || "GET";
+
+      if (url === "/api/v1/ocr/status") {
+        return new Response(
+          JSON.stringify({
+            available: true,
+            engine_name: "tesseract",
+            engine_version: "5.3.0",
+            model_dir: "/app/data/models/tessdata",
+            languages: ["fas", "eng"],
+            installed_models: ["fas.traineddata", "eng.traineddata"],
+            missing_models: [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      if (url === "/api/v1/files/file-55/pages" && method === "GET") {
+        return new Response(
+          JSON.stringify([
+            {
+              file_id: "file-55",
+              page_number: 1,
+              raw_text: "گزارش مالی ساهر",
+              normalized_text: "گزارش مالی ساهر",
+              char_count: 15,
+              extraction_method: "ocr_pdf_page",
+              page_status: "ready",
+              ocr_confidence: 92.4,
+              width: 1000,
+              height: 480,
+              is_user_modified: false,
+              bboxes: [{ text: "گزارش", x: 60, y: 48, width: 110, height: 36, confidence: 93.1, line_num: 1, block_num: 1 }],
+            },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      if (url === "/api/v1/files/file-55/pages/1" && method === "PATCH") {
+        return new Response(
+          JSON.stringify({
+            file_id: "file-55",
+            page_number: 1,
+            raw_text: "متن اصلاح‌شده صفحه اول",
+            normalized_text: "متن اصلاح شده صفحه اول",
+            char_count: 22,
+            extraction_method: "user_edit",
+            page_status: "ready",
+            is_user_modified: true,
+            bboxes: [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      throw new Error(`Unexpected URL: ${url}`);
+    };
+
+    const ocrStatus = await ArchiveApiClient.getOcrStatus();
+    assert.equal(ocrStatus.available, true);
+    assert.equal(ocrStatus.engine_name, "tesseract");
+
+    const pages = await ArchiveApiClient.getFilePages("file-55");
+    assert.equal(pages.length, 1);
+    assert.equal(pages[0].page_number, 1);
+    assert.equal(pages[0].bboxes.length, 1);
+
+    const edited = await ArchiveApiClient.updatePageText("file-55", 1, "متن اصلاح‌شده صفحه اول");
+    assert.equal(edited.is_user_modified, true);
+
+    const previewUrl = ArchiveApiClient.getPagePreviewUrl("file-55", 2);
+    assert.equal(previewUrl, "/api/v1/files/file-55/pages/2/preview");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+

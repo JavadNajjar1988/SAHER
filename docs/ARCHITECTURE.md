@@ -1,6 +1,6 @@
 # معماری سیستم ساهر (SAHER System Architecture)
 
-این سند معماری پیاده‌سازی‌شده و تأییدشدهٔ سامانه ساهر تا پایان **مایلستون ۲ (موتور پردازش پایدار و کارگرهای پس‌زمینه — Durable Processing Engine & Background Workers)** را شرح می‌دهد.
+این سند معماری پیاده‌سازی‌شده و تأییدشدهٔ سامانه ساهر تا پایان **مایلستون ۳ (تشخیص متن فارسی و انگلیسی آفلاین، اسناد ترکیبی و جست‌وجوی صفحه‌محور — Offline Persian/English OCR, Hybrid PDF & Page-Level Search)** را شرح می‌دهد.
 
 ---
 
@@ -9,118 +9,124 @@
 ```text
 ├── apps/
 │   └── web/                        # واسط کاربری فارسی (React 19 + TypeScript 5.7 + Vite 6)
-│       ├── vite.config.ts          # پروکسی توسعه (/api و /health به FastAPI روی 127.0.0.1:8000)
+│       ├── vite.config.ts          # پروکسی توسعه (/api و /health به FastAPI)
 │       └── src/
 │           ├── components/         # قطعات رابط کاربری (Sidebar, Preview, FileDetailModal, ImportDialog, ProcessingQueueView)
 │           ├── services/           # کلاینت ارتباطی نوع‌داده‌دار (بدون بازگشت پنهان به localStorage)
 │           │   ├── apiClient.ts
 │           │   └── apiClient.test.ts
-│           ├── types/              # تعاریف مدل‌های داده، وضعیت استخراج، کارهای پایدار و حالت‌های منابع
-│           └── main.tsx            # ریشهٔ برنامه، پایش زندهٔ صف پردازش و مدیریت حالت عملیاتی
+│           ├── types/              # تعاریف مدل‌های داده، صفحات، مختصات OCR، کارهای پایدار و حالت‌های منابع
+│           └── main.tsx            # ریشهٔ برنامه، پایش زندهٔ صف پردازش، ناوبری مستقیم از جست‌وجو به صفحهٔ منطبق
+├── data/
+│   └── models/
+│       ├── tessdata/               # مدل‌های آفلاین Tesseract 5 LSTM (fas.traineddata, eng.traineddata, osd.traineddata)
+│       └── fonts/                  # فونت محلی Vazirmatn.ttf برای رندر پیش‌نمایش برگه‌های آرشیوی
 ├── scripts/
-│   └── dev_runner.mjs              # راه‌انداز چندسکویی (Windows 11 / Linux / macOS) بدون وابستگی به نحو شل یونیکس
+│   └── dev_runner.mjs              # راه‌انداز چندسکویی (Windows 11 / Linux / macOS)
 ├── services/
 │   ├── api/                        # وب‌سرویس محلی (Python 3.10+ + FastAPI)
-│   │   ├── config.py               # تنظیمات سقف آپلود، فهرست مجاز صریح Origin، توکن نشست و تنظیمات کارگر
-│   │   ├── database.py             # اتصال SQLite با WAL، مهاجرت‌های نسخه‌دار غیرمخرب و جداول صف پایدار
-│   │   ├── migrations.py           # مدیر مهاجرت ایمن: پیش‌نمایش Dry-Run، تهیهٔ پشتیبان تأییدشده، تأیید صریح و بازیابی
-│   │   ├── repository.py           # الگوی مخزن با دریافت جریانی، ثبت اتمیک کار پایدار و FTS5
-│   │   ├── schemas.py              # قراردادهای داده Pydantic برای فایل‌ها، کارها، کارگرها و مهاجرت‌ها
-│   │   └── main.py                 # اندپوینت‌های REST نسخه ۱ (/api/v1)، مدیریت کارها، بازپردازش و محافظت امنیتی
-│   ├── ingestion/                  # موتور اعتبارسنجی باینری، نرمال‌سازی فارسی و استخراج متن
-│   │   └── extractor.py            # بررسی Magic Bytes، نرمال‌سازی ي/ك و نیم‌فاصله، استخراج TXT/PDF/DOCX
-│   └── worker/                     # موتور پردازش پایدار و کارگرهای مستقل پایتون (Milestone 2)
+│   │   ├── config.py               # تنظیمات سقف آپلود، امنیت، مسیر مدل‌های OCR (SAHER_OCR_MODEL_DIR) و کارگرها
+│   │   ├── database.py             # اتصال SQLite با WAL، مهاجرت‌های غیرمخرب (تا نسخه 003) و جداول pages_fts / files_fts
+│   │   ├── migrations.py           # مدیر مهاجرت ایمن: پیش‌نمایش Dry-Run، تهیهٔ پشتیبان تأییدشده و بازیابی
+│   │   ├── repository.py           # الگوی مخزن با دریافت جریانی، جست‌وجوی صفحه‌محور (matched_page) و ویرایش دستی صفحه
+│   │   ├── schemas.py              # قراردادهای داده Pydantic برای فایل‌ها، صفحات، مختصات Bounding Box، کارها و سلامت OCR
+│   │   └── main.py                 # اندپوینت‌های REST نسخه ۱ (/api/v1)، پیش‌نمایش تصویری صفحات، ویرایش صفحه و وضعیت OCR
+│   ├── ocr/                        # لایهٔ انتزاعی و قابل تعویض تشخیص متن آفلاین (Milestone 3)
+│   │   ├── base.py                 # رابط انتزاعی OCREngineAdapter، مدل‌های خروجی و خطاهای OCRModelMissingError / OCRPageReadError
+│   │   ├── tesseract_engine.py     # پیاده‌سازی آفلاین Tesseract 5 (fas+eng) با استخراج مختصات کلمات و ترتیب خواندن راست‌به‌چپ
+│   │   └── __init__.py             # کارخانهٔ انتخاب موتور OCR (get_ocr_engine)
+│   ├── ingestion/                  # موتور اعتبارسنجی باینری، نرمال‌سازی فارسی، تفکیک PDF ترکیبی و رندر صفحات
+│   │   └── extractor.py            # بررسی Magic Bytes، نرمال‌سازی ي/ك/نیم‌فاصله/حذف RLM، تفکیک صفحات متنی و اسکن‌شده در PDF
+│   └── worker/                     # موتور پردازش پایدار و کارگرهای مستقل پایتون (Milestones 2 & 3)
 │       ├── lifecycle.py            # وضعیت‌های چرخهٔ حیات کار، مراحل پردازش، پروفایل‌های منابع و محاسبهٔ Backoff
-│       ├── queue.py                # صف تراکنشی SQLite، دریافت اتمیک کار (BEGIN IMMEDIATE) و بازیابی Lease
-│       ├── handlers.py             # اجرای مرحله‌به‌مرحلهٔ استخراج، نمایه‌سازی FTS5 و حفظ ویرایش‌های کاربر
+│       ├── queue.py                # صف تراکنشی SQLite، دریافت اتمیک کار و گزارش وضعیت واقعی کارگرهای مستقل (worker_registry)
+│       ├── handlers.py             # اجرای مرحله‌به‌مرحلهٔ استخراج، OCR صفحه‌به‌صفحه با Checkpoint، ایزوله‌سازی خطای صفحه و حفظ ویرایش‌ها
 │       └── runner.py               # ناظر کارگر پس‌زمینه با استخر نخ قابل تنظیم، ضربان قلب و اجرای مستقل
-├── tests/
-│   ├── test_api.py                 # آزمون‌های یکپارچگی مایلستون ۱.۵ (آپلود، امنیت، FTS5 و اتمیک بودن)
-│   └── test_worker_and_jobs.py     # آزمون‌های مایلستون ۲ (صف پایدار، هم‌زمانی کارگرها، بازیابی کرش، بازپردازش و مهاجرت ایمن)
-└── pyproject.toml                  # مشخصات تکرارپذیر وابستگی‌های پایتون و تنظیمات pytest
+├── Dockerfile                      # تصویر داکر آفلاین شامل موتور Tesseract 5 و بسته‌های زبان فارسی و انگلیسی
+├── docker-compose.yml              # اجرای جداسازی‌شدهٔ saher-api و کارگر مستقل saher-worker روی شبکهٔ داخلی بدون اینترنت
+└── tests/
+    ├── test_api.py                 # آزمون‌های یکپارچگی مایلستون ۱.۵
+    ├── test_worker_and_jobs.py     # آزمون‌های مایلستون ۲ (صف پایدار، هم‌زمانی کارگرها، بازیابی کرش و مهاجرت ایمن)
+    └── test_milestone3_ocr.py      # آزمون‌های پذیرش مایلستون ۳ (OCR تصویر فارسی، PDF اسکن‌شده چندصفحه‌ای، PDF ترکیبی، خطای صفحه و کارگر مستقل)
 ```
 
 ---
 
-## ۲. مدل دادهٔ کار پایدار (Durable Job Model)
+## ۲. موتور تشخیص متن آفلاین (Pluggable Offline OCR Engine — Milestone 3)
 
-در مایلستون ۲، جداول زیر از طریق مهاجرت نسخه‌دار و غیرمخرب (`002_milestone_2_durable_jobs`) به پایگاه‌داده SQLite افزوده شده‌اند:
+### ۲.۱ رابط قابل تعویض (`OCREngineAdapter`)
+در مسیر `services/ocr/base.py`، کلاس پایهٔ انتزاعی `OCREngineAdapter` تعریف شده است تا منطق صف پردازش و API هیچ وابستگی مستقیمی به کتابخانهٔ خاص OCR نداشته باشند. پیاده‌سازی پیش‌فرض (`TesseractOCREngine` در `services/ocr/tesseract_engine.py`) از طریق متغیر محیطی `SAHER_OCR_ENGINE=tesseract` بارگذاری می‌شود و در آینده می‌توان بدون تغییر در `handlers.py` یا `repository.py`، موتورهای دیگر (مانند PaddleOCR یا Surya) را جایگزین کرد.
 
-1. **`jobs` (جدول کارهای پردازشی پایدار)**:
-   - `id`: شناسهٔ یکتای کار (UUID)
-   - `archive_id` و `file_id`: کلیدهای خارجی به آرشیو و فایل مرتبط
-   - `job_type`: نوع کار (`FILE_INGESTION`، `REANALYZE`، `STAGE_REPROCESS`)
-   - `target_stage` و `processing_stage`: مرحلهٔ هدف و مرحلهٔ جاری پردازش
-   - `state`: وضعیت چرخهٔ حیات کار (`QUEUED`, `RUNNING`, `PAUSED`, `COMPLETED`, `FAILED`, `CANCELLED`)
-   - `priority`: اولویت اجرا (عدد بزرگ‌تر = اولویت بالاتر؛ پیش‌فرض `50` برای واردسازی و `60` برای بازپردازش)
-   - `attempt_count` و `max_retries`: شمارندهٔ تلاش‌های انجام‌شده و سقف تلاش مجدد
-   - `progress` و `progress_message`: درصد پیشرفت واقعی مرحله‌ای (`0.0` تا `100.0`) و توضیح مرحله
-   - `error_code`, `error_message`, `is_retryable`: کد و پیام خطای ساخت‌یافته و قابلیت تلاش مجدد
-   - `worker_id`, `lease_expires_at`, `heartbeat_at`: مالکیت کارگر و زمان انقضای Lease برای تشخیص کرش
-   - `next_run_at`: زمان اجرای بعدی (برای پیاده‌سازی تأخیر نمایی تلاش مجدد)
-   - `processing_version` و `checkpoint_json`: نسخهٔ پردازش و متادیتای نقطهٔ بازیابی (Checkpoint)
-   - `created_at`, `started_at`, `updated_at`, `completed_at`: زمان‌بندی‌های کامل چرخهٔ حیات
+### ۲.۲ مشخصات نسخهٔ موتور، مدل‌ها و مسیر فایل‌ها
+| مؤلفه | نسخه / مشخصات | مسیر در مخزن / کانتینر |
+|---|---|---|
+| **موتور باینری** | `tesseract 5.3.0` (مبتنی بر شبکهٔ عصبی LSTM، به همراه `leptonica-1.82.0` و `libraqm0`) | `/usr/bin/tesseract` |
+| **مدل زبان فارسی** | `fas.traineddata` (مدل رسمی Tesseract 5 LSTM برای خط فارسی — ۴۲۲ کیلوبایت) | `data/models/tessdata/fas.traineddata` |
+| **مدل زبان انگلیسی** | `eng.traineddata` (مدل رسمی Tesseract 5 LSTM برای متون و شناسه‌های لاتین — ۴.۰ مگابایت) | `data/models/tessdata/eng.traineddata` |
+| **مدل تشخیص جهت صفحه** | `osd.traineddata` (Orientation & Script Detection — ۱۰.۵ مگابایت) | `data/models/tessdata/osd.traineddata` |
+| **مسیر پیکربندی مدل‌ها** | متغیر محیطی `SAHER_OCR_MODEL_DIR` (پیش‌فرض: `<ریشهٔ پروژه>/data/models/tessdata`) | ارسال صریح با فلگ `--tessdata-dir` در زمان اجرا |
 
-2. **`job_events` (تاریخچهٔ تلاش‌ها و رویدادهای اجرای کار)**:
-   - ثبت تمام تغییر وضعیت‌ها (`CREATED`, `CLAIMED`, `STAGE_TRANSITION`, `PAUSED`, `RESUMED`, `RETRY_SCHEDULED`, `RECOVERED_LEASE`, `COMPLETED`, `FAILED`, `CANCELLED`) به تفکیک شمارهٔ تلاش (`attempt_number`) و شناسهٔ کارگر (`worker_id`).
-
-3. **`worker_registry` (ثبت وضعیت کارگرها و منابع)**:
-   - نگهداری شناسهٔ کارگر، حالت منابع (`Eco`, `Balanced`, `Performance`)، تعداد هم‌زمانی، تعداد کارهای فعال و آخرین ضربان قلب (`last_heartbeat_at`).
-
----
-
-## ۳. چرخهٔ حیات کار و مراحل پردازش (Job States & Processing Stages)
-
-### الف) انتقال وضعیت‌های مجاز (Job State Transitions)
-- `QUEUED` $\rightarrow$ `RUNNING` (دریافت اتمیک توسط کارگر)، `PAUSED` (توقف توسط کاربر)، `CANCELLED` (لغو توسط کاربر)
-- `RUNNING` $\rightarrow$ `COMPLETED` (اتمام موفق)، `QUEUED` (زمان‌بندی تلاش مجدد یا بازیابی Lease منقضی)، `FAILED` (خطای دائمی یا اتمام سقف تلاش)، `PAUSED`، `CANCELLED`
-- `PAUSED` $\rightarrow$ `QUEUED` (ادامه توسط کاربر)، `CANCELLED`
-- `FAILED` $\rightarrow$ `QUEUED` (تلاش مجدد دستی)، `CANCELLED`
-- `CANCELLED` $\rightarrow$ `QUEUED` (تلاش مجدد دستی)
-
-### ب) مراحل پردازش مستقل از وضعیت فایل (Processing Stages)
-1. `DISCOVERY`: بررسی رکورد فایل و وجود فیزیکی در مخزن دیسک (`10%`)
-2. `VALIDATION`: بررسی یکپارچگی هش `SHA-256` روی دیسک و امضای باینری (`25%`)
-3. `EXTRACTION`: استخراج متن واقعی از `TXT/MD/CSV/JSON/PDF/DOCX` یا تشخیص تصویر/PDF اسکن‌شده (`55%`)
-4. `OCR_PENDING` / `ANALYSIS_PENDING`: برای تصاویر و اسناد PDF اسکن‌شده؛ کار مایلستون ۲ بدون جعل متن OCR در این مرحله ثبت شده و وضعیت استخراج فایل `pending_ocr` باقی می‌ماند.
-5. `INDEXING`: بروزرسانی جدول `documents`، صفحات `pages` و نمایهٔ تمام‌متن `files_fts` به‌صورت تکرارناپذیر (Idempotent) (`80%`)
-6. `FINALIZATION`: ثبت `processing_version` و تکمیل کار (`100%`)
+### ۲.۳ شیوهٔ نصب و اجرای کاملاً آفلاین
+1. **در محیط لینوکس / اوبونتو / دبیان (و ایمیج Docker)**:
+   ```bash
+   apt-get update && apt-get install -y --no-install-recommends \
+       tesseract-ocr tesseract-ocr-fas tesseract-ocr-eng libraqm0
+   mkdir -p data/models/tessdata
+   cp /usr/share/tesseract-ocr/5/tessdata/{fas,eng,osd}.traineddata data/models/tessdata/
+   ```
+2. **در محیط ویندوز ۱۱**:
+   - نصب باینری Tesseract 5 و قرار دادن فایل‌های `fas.traineddata` و `eng.traineddata` در پوشهٔ `data\models\tessdata`.
+3. **تضمین اجرای بدون اینترنت**:
+   - موتور `TesseractOCREngine` در زمان اجرا هیچ درخواست شبکه‌ای ارسال نمی‌کند و صرفاً از فایل‌های موجود در `SAHER_OCR_MODEL_DIR` استفاده می‌کند.
+4. **گزارش خطای مشخص در صورت نبود مدل (`OCR_MODEL_MISSING`)**:
+   - اگر باینری موتور یا هر یک از فایل‌های مدل (`fas.traineddata` یا `eng.traineddata`) در مسیر `SAHER_OCR_MODEL_DIR` موجود نباشد، متد `ensure_ready()` و اندپوینت `GET /api/v1/ocr/status` کد خطای صریح `OCR_MODEL_MISSING` را به همراه نام دقیق فایل‌های مفقود و دستور نصب بستهٔ لازم (`tesseract-ocr-fas` / `tesseract-ocr-eng`) برمی‌گردانند.
 
 ---
 
-## ۴. سیاست بازیابی، تلاش مجدد و تکرارناپذیری (Recovery, Retry & Idempotency Policy)
+## ۳. پردازش تصاویر، اسناد اسکن‌شده و اسناد ترکیبی (Hybrid PDF Pipeline)
 
-- **دریافت اتمیک کار (Atomic Claiming)**: کارگرها با تراکنش `BEGIN IMMEDIATE` در SQLite کار آماده را انتخاب و هم‌زمان `state = 'RUNNING'`، `worker_id` و `lease_expires_at` را ثبت می‌کنند تا دو کارگر هم‌زمان هرگز یک کار واحد را اجرا نکنند.
-- **بازیابی خودکار کرش کارگر (Crash & Lease Recovery)**: در صورت توقف ناگهانی کارگر یا ری‌استارت برنامه، کارهای در وضعیت `RUNNING` که زمان `lease_expires_at` آن‌ها گذشته است توسط `recover_expired_leases()` شناسایی شده و در صورت نرسیدن به سقف `max_retries` با حفظ `checkpoint_json` به وضعیت `QUEUED` بازگردانده می‌شوند.
-- **تأخیر نمایی (Exponential Backoff)**: خطاهای موقت (`RetryableJobError` یا قفل موقت SQLite) با فرمول $\min(60, \text{base} \times 2^{\text{attempt}-1})$ زمان‌بندی مجدد می‌شوند، در حالی که خطاهای دائمی (`PermanentJobError` مانند PDF رمزدار یا امضای باینری نامعتبر) بلافاصله به وضعیت `FAILED` می‌روند.
-- **حفظ ویرایش‌های کاربر و داده‌های معتبر قبلی**: در زمان بازپردازش (`REANALYZE`)، اگر کاربر موضوع، برچسب‌ها یا وضعیت فایل را دستی تغییر داده باشد (`is_user_modified = 1`)، کارگر آن‌ها را بازنویسی نمی‌کند. همچنین در صورت بروز خطا در بازپردازش، متن معتبر قبلی در `documents` و `files_fts` حفظ می‌شود.
-
----
-
-## ۵. مدیریت منابع (Resource Modes)
-
-| حالت منابع | هم‌زمانی کارگر (`concurrency`) | فاصلهٔ پایش (`poll_interval`) | کاربرد پیشنهادی |
-|---|---|---|---|
-| **Eco (کم‌مصرف)** | ۱ کارگر | `0.8s` | کار در پس‌زمینه روی لپ‌تاپ با حداقل مصرف پردازنده |
-| **Balanced (متعادل)** | ۲ کارگر | `0.35s` | حالت پیش‌فرض برای کاربری روزمره در ویندوز ۱۱ |
-| **Performance (حداکثر توان)** | ۴ کارگر | `0.15s` | واردسازی و نمایه‌سازی دسته‌ای اسناد پرحجم |
+1. **اسناد متنی دیجیتال (`TXT, MD, CSV, JSON, DOCX`)**:
+   - مسیر استخراج مستقیم حفظ شده است (`direct_text` و `docx_text`) و بدون ورود به مرحلهٔ `OCR_PENDING` مستقیماً در `INDEXING` نمایه‌سازی می‌شوند.
+2. **تصاویر (`PNG, JPG, WEBP, BMP`)**:
+   - تصاویر واقعی در مرحلهٔ `EXTRACTION` شناسایی شده و با `needs_ocr_pages = [1]` وارد مرحلهٔ `OCR_PENDING` در صف پایدار می‌شوند تا متن خام، متن نرمال‌شده و مختصات قطعات متن (`bboxes`) استخراج گردد (`extraction_method = 'ocr_image'`).
+3. **اسناد PDF دیجیتال، اسکن‌شده و ترکیبی (Hybrid PDF)**:
+   - در مرحلهٔ `EXTRACTION`، هر صفحهٔ PDF به صورت مستقل بررسی می‌شود:
+     - اگر صفحه دارای لایهٔ متنی دیجیتال قابل استفاده (`>= 15` نویسهٔ معنادار) باشد، متن آن مستقیماً خوانده شده (`extraction_method = 'pdf_text'`) و وارد لیست OCR نمی‌شود.
+     - فقط صفحاتی که فاقد لایهٔ متنی قابل استفاده هستند در فهرست `needs_ocr_pages` قرار می‌گیرند.
+   - در مرحلهٔ `OCR_PENDING`، کارگر فقط صفحات موجود در `needs_ocr_pages` را با `pypdfium2` به تصویر رندر کرده و به موتور OCR می‌سپارد (`extraction_method = 'ocr_pdf_page'`).
+   - در صورتی که یک سند PDF ترکیبی از صفحات دیجیتال و صفحات اسکن‌شده باشد، روش استخراج کل سند `hybrid_pdf_ocr` ثبت می‌شود.
 
 ---
 
-## ۶. اندپوینت‌های API نسخه ۱ (`/api/v1`)
+## ۴. ذخیره‌سازی صفحه‌محور، مختصات و جست‌وجوی فارسی (`pages` & `pages_fts`)
 
-- `GET /health` — وضعیت سلامت سرویس، پایگاه‌داده، فضای ذخیره‌سازی و کارگر پس‌زمینه
-- `GET /api/v1/auth/session` — تبادل اطلاعات نشست امنیتی محلی
-- `GET /api/v1/stats` — آمار کلی فایل‌ها و شمارنده‌های صف پردازش
-- `GET /api/v1/files` و `GET /api/v1/files/{file_id}` — فهرست، جست‌وجوی FTS5 و جزئیات فایل به همراه آخرین وضعیت کار
-- `POST /api/v1/files/import` — واردسازی جریانی فایل و ثبت کار پایدار (پشتیبانی از `async_mode=true` برای بازگشت فوری و اجرای پس‌زمینه)
-- `POST /api/v1/files/{file_id}/reanalyze` — ثبت کار بازپردازش کنترل‌شده (با جلوگیری از ایجاد کار تکراری فعال)
-- `GET /api/v1/jobs` و `GET /api/v1/jobs/{job_id}` — فهرست کارهای صف (با فیلتر وضعیت و مرحله) و دریافت جزئیات به همراه تاریخچهٔ `events`
-- `POST /api/v1/jobs/{job_id}/pause` — توقف موقت کار
-- `POST /api/v1/jobs/{job_id}/resume` — ادامهٔ کار متوقف‌شده
-- `POST /api/v1/jobs/{job_id}/cancel` — لغو کار
-- `POST /api/v1/jobs/{job_id}/retry` — تلاش مجدد کار خطادار یا لغوشده
-- `POST /api/v1/workers/config` — تغییر حالت منابع (`Eco` / `Balanced` / `Performance`) و هم‌زمانی کارگرها
-- `GET /api/v1/migrations/legacy-preview` — گزارش پیش‌نمایش غیرمخرب (Dry-Run) رکوردهای قدیمی
-- `POST /api/v1/migrations/legacy-cleanup` — پاک‌سازی رکوردهای نمونهٔ قدیمی صرفاً با تأیید صریح کاربر و پس از تهیهٔ نسخهٔ پشتیبان تأییدشده
-- `POST /api/v1/migrations/restore/{backup_id}` — بازیابی کامل رکوردها و فایل‌ها از نسخهٔ پشتیبان مهاجرت
+در مهاجرت غیرمخرب `003_milestone_3_ocr_and_pages_fts`، ساختار ذخیره‌سازی صفحه‌محور تکمیل شده است:
+- **جدول `pages`**:
+  - ذخیرهٔ `page_number` (شمارهٔ صفحه از ۱ تا N)، `raw_text` (متن خام استخراج‌شده)، `normalized_text` (متن نرمال‌شده برای جست‌وجو)، `bboxes_json` (آرایهٔ مختصات قطعات متن شامل `text, x, y, width, height, confidence, line_num, block_num, direction`)، `extraction_method`، `page_status` (`extracted`, `failed`, `user_modified`, `empty`)، `error_code`، `error_message` و `is_user_modified`.
+- **نرمال‌سازی ویژهٔ زبان فارسی**:
+  - یکسان‌سازی نویسه‌های عربی و فارسی (`ي/ى` $\rightarrow$ `ی`، `ك` $\rightarrow$ `ک`، `ة` $\rightarrow$ `ه`، ارقام فارسی/عربی به استاندارد).
+  - حذف نویسه‌های کنترلی نامرئی جهت‌دهی (`RLM \u200f` و `LRM \u200e`) که موتورهای OCR در انتهای کلمات فارسی درج می‌کنند تا مرز کلمات در نمایه‌سازی مخدوش نشود.
+  - حفظ نیم‌فاصله (`ZWNJ \u200c`) در متن نمایشی و بسط هوشمند کلمات دارای نیم‌فاصله در `normalize_for_fts` به‌گونه‌ای که هم جست‌وجوی عبارات چندکلمه‌ای (حفظ مجاورت کلمات) و هم جست‌وجوی با نیم‌فاصله، با فاصله یا چسبیده نتیجهٔ دقیق برگردانند.
+- **جدول مجازی `pages_fts` (FTS5)**:
+  - نمایه‌سازی تمام‌متن به تفکیک هر صفحه (`file_id, page_number, normalized_text`).
+  - در زمان جست‌وجو (`GET /api/v1/files?query=...`)، علاوه بر تطابق در سطح سند (`files_fts`)، صفحات منطبق از `pages_fts` استخراج شده و شمارهٔ اولین صفحهٔ منطبق (`matched_page`)، فهرست تمام صفحات منطبق (`matched_pages`) و بریدهٔ متن همان صفحه (`matched_snippet`) در نتیجهٔ جست‌وجو بازگردانده می‌شوند.
+
+---
+
+## ۵. ایزوله‌سازی خطای صفحه، حفظ ویرایش‌های کاربر و تکرارناپذیری
+
+- **ایزوله‌سازی خطای خواندن یک صفحه**: اگر در یک سند چندصفحه‌ای، خواندن یا رندر یک صفحهٔ خاص با خطا مواجه شود (مثلاً خرابی جریان تصویر در صفحهٔ ۲: `PDF_PAGE_STREAM_CORRUPTED`)، خطا با ذکر شمارهٔ دقیق همان صفحه (`خطا در خواندن متن صفحهٔ 2: ...`) در رکورد صفحه (`page_status = 'failed'`) و رویداد کار (`PAGE_OCR_ERROR`) ثبت می‌شود، اما متن سالم صفحات دیگر (مثلاً صفحات ۱ و ۳) به‌طور کامل ذخیره و در `pages_fts` و `files_fts` نمایه‌سازی می‌شود و وضعیت فایل `نیازمند بازبینی` به همراه `failed_pages = [2]` ثبت می‌گردد.
+- **نقطهٔ بازیابی صفحه‌ای (Per-Page Checkpointing)**: پس از اتمام OCR هر صفحه، نتیجهٔ آن صفحه در `checkpoint_json.ocr_completed_pages` ذخیره می‌شود. در صورت توقف کار (`Pause`)، ادامه (`Resume`) یا کرش و راه‌اندازی مجدد کارگر، صفحات تکمیل‌شده مجدداً OCR نمی‌شوند و در مرحلهٔ `INDEXING`، بازنویسی اتمیک بر اساس کلید `(file_id, page_number)` مانع از ایجاد رکورد تکراری در `pages`، `pages_fts` یا `files_fts` می‌شود.
+- **حفظ اصلاح‌های دستی کاربر و متن معتبر قبلی در بازپردازش (`reanalyze`)**:
+  - کاربر می‌تواند متن هر صفحه را از طریق جزئیات فایل (`PATCH /api/v1/files/{id}/pages/{page_number}`) ویرایش کند (`pages.is_user_modified = 1`).
+  - در زمان بازپردازش (`POST /api/v1/files/{id}/reanalyze`)، صفحاتی که دارای `is_user_modified = 1` هستند دست‌نخورده حفظ می‌شوند. همچنین اگر صفحه‌ای در بازپردازش جدید با خطا مواجه شود ولی از اجرای قبلی دارای متن معتبر باشد، متن معتبر قبلی حفظ می‌گردد.
+
+---
+
+## ۶. بررسی سلامت واقعی کارگر مستقل و اجرای Docker
+
+- **گزارش واقعی وضعیت کارگر مستقل (`/health`)**:
+  - در نسخهٔ قبلی، زمانی که کارگر داخلی وب‌سرویس غیرفعال بود (`SAHER_ENABLE_BACKGROUND_WORKER=false`) و کارگر در پردازش یا کانتینر مستقل (`python -m services.worker.runner`) اجرا می‌شد، اندپوینت `/health` صرفاً متغیر درون‌پردازشی `default_worker.is_running` را بررسی می‌کرد و وضعیت کارگر را به اشتباه آفلاین گزارش می‌داد.
+  - در مایلستون ۳، متد `JobQueueRepository.get_online_worker_summary()` جدول `worker_registry` را با بررسی پنجرهٔ زمانی ضربان قلب (`worker_heartbeat_ttl_seconds = 45`) پایش می‌کند؛ بنابراین `/health` و `/api/v1/jobs` وضعیت واقعی کارگر مستقل را به‌درستی `worker_online: true` گزارش می‌کنند.
+- **اجرای آفلاین با Docker (`Dockerfile` و `docker-compose.yml`)**:
+  - سرویس `saher-api` (پورت `8000` با `SAHER_ENABLE_BACKGROUND_WORKER=false`) و سرویس مستقل `saher-worker` (`python -m services.worker.runner`) روی شبکهٔ داخلی `saher_offline_net` (`internal: true` — بدون دسترسی به اینترنت) با اشتراک حجم داده و پوشهٔ مدل‌های `data/models/tessdata` تعریف شده‌اند.

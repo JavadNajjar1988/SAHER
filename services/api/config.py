@@ -33,7 +33,7 @@ def _parse_origins_env() -> List[str]:
 
 class Settings(BaseModel):
     app_name: str = "SAHER Offline Archive API"
-    app_version: str = "0.2.0"
+    app_version: str = "0.3.0"
     api_prefix: str = "/api/v1"
 
     # Operational mode: production archives start empty unless demo_mode is explicitly enabled
@@ -47,6 +47,30 @@ class Settings(BaseModel):
     db_path: str = os.path.join(data_dir, "saher.db")
     storage_dir: str = os.path.join(data_dir, "storage")
     backup_dir: str = os.path.join(data_dir, "backups")
+
+    # Offline OCR Engine & Model Bundle settings (Milestone 3)
+    ocr_engine: str = Field(
+        default_factory=lambda: os.environ.get("SAHER_OCR_ENGINE", "tesseract")
+    )
+    ocr_model_dir: str = Field(
+        default_factory=lambda: os.environ.get(
+            "SAHER_OCR_MODEL_DIR",
+            os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")), "data", "models", "tessdata")
+            if os.path.isdir(
+                os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")), "data", "models", "tessdata")
+            )
+            else "/usr/share/tesseract-ocr/5/tessdata",
+        )
+    )
+    ocr_languages: str = Field(
+        default_factory=lambda: os.environ.get("SAHER_OCR_LANGUAGES", "fas+eng")
+    )
+    ocr_render_scale: float = Field(
+        default_factory=lambda: float(os.environ.get("SAHER_OCR_RENDER_SCALE", "2.0"))
+    )
+    pdf_digital_text_min_chars: int = Field(
+        default_factory=lambda: int(os.environ.get("SAHER_PDF_MIN_TEXT_CHARS", "15"))
+    )
 
     # Ingestion security & limits
     max_upload_size_bytes: int = Field(
@@ -96,6 +120,9 @@ class Settings(BaseModel):
     )
     worker_poll_interval_seconds: float = Field(
         default_factory=lambda: float(os.environ.get("SAHER_WORKER_POLL_SECONDS", "0.35"))
+    )
+    worker_heartbeat_ttl_seconds: int = Field(
+        default_factory=lambda: int(os.environ.get("SAHER_WORKER_HEARTBEAT_TTL_SECONDS", "45"))
     )
 
     def ensure_dirs(self) -> None:

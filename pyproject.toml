@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "saher-backend"
-version = "0.1.5"
-description = "SAHER Offline-First Intelligent Archive Backend (FastAPI + SQLite FTS5)"
+version = "0.3.0"
+description = "SAHER Offline-First Intelligent Archive Backend (FastAPI + SQLite FTS5 + Offline Persian OCR)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Proprietary" }
@@ -15,6 +15,10 @@ dependencies = [
     "pydantic>=2.7.0",
     "python-multipart>=0.0.9",
     "pypdf>=4.2.0",
+    "pypdfium2>=4.25.0",
+    "Pillow>=10.0.0",
+    "pytesseract>=0.3.10",
+    "reportlab>=4.0.0",
     "python-docx>=1.1.0",
     "openpyxl>=3.1.2",
 ]

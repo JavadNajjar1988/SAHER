@@ -132,7 +132,7 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
         _ensure_column(conn, "documents", "updated_at", "TIMESTAMP")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_file_id ON documents(file_id);")
 
-        # 4. Pages table (for page-level text & future OCR bounding boxes)
+        # 4. Pages table (for page-level text, OCR bounding boxes, page-level errors & user overrides)
         conn.execute("""
         CREATE TABLE IF NOT EXISTS pages (
             id TEXT PRIMARY KEY,
@@ -141,9 +141,29 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
             page_number INTEGER NOT NULL,
             raw_text TEXT NOT NULL DEFAULT '',
             normalized_text TEXT NOT NULL DEFAULT '',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            bboxes_json TEXT NOT NULL DEFAULT '[]',
+            extraction_method TEXT NOT NULL DEFAULT 'direct_text',
+            page_status TEXT NOT NULL DEFAULT 'extracted',
+            error_code TEXT,
+            error_message TEXT,
+            ocr_confidence REAL,
+            width INTEGER,
+            height INTEGER,
+            is_user_modified INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
+        _ensure_column(conn, "pages", "bboxes_json", "TEXT NOT NULL DEFAULT '[]'")
+        _ensure_column(conn, "pages", "extraction_method", "TEXT NOT NULL DEFAULT 'direct_text'")
+        _ensure_column(conn, "pages", "page_status", "TEXT NOT NULL DEFAULT 'extracted'")
+        _ensure_column(conn, "pages", "error_code", "TEXT")
+        _ensure_column(conn, "pages", "error_message", "TEXT")
+        _ensure_column(conn, "pages", "ocr_confidence", "REAL")
+        _ensure_column(conn, "pages", "width", "INTEGER")
+        _ensure_column(conn, "pages", "height", "INTEGER")
+        _ensure_column(conn, "pages", "is_user_modified", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "pages", "updated_at", "TIMESTAMP")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_pages_file_id ON pages(file_id, page_number);")
 
         # 5. Tags
@@ -163,7 +183,7 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
         );
         """)
 
-        # 7. Full-Text Search Table (FTS5)
+        # 7. Full-Text Search Table (FTS5) - Document level
         conn.execute("""
         CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
             file_id UNINDEXED,
@@ -171,6 +191,17 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
             extracted_text,
             topic,
             tags,
+            tokenize = 'unicode61'
+        );
+        """)
+
+        # 7b. Milestone 3: Page-level Full-Text Search Table (FTS5) for exact page matching
+        conn.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
+            file_id UNINDEXED,
+            page_number UNINDEXED,
+            raw_text,
+            normalized_text,
             tokenize = 'unicode61'
         );
         """)
@@ -261,6 +292,7 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
         """)
 
         _record_schema_migration(conn, "002_milestone_2_durable_jobs", "Durable jobs, job_events, worker_registry, and migration_audit_log tables")
+        _record_schema_migration(conn, "003_milestone_3_ocr_and_pages_fts", "Page-level OCR text, bounding boxes, page error tracking, and pages_fts virtual table")
 
     if close_after:
         conn.close()

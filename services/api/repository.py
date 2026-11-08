@@ -5,7 +5,7 @@ import zlib
 import struct
 import hashlib
 import sqlite3
-from typing import List, Optional, AsyncIterator
+from typing import List, Optional, AsyncIterator, Any
 from services.api.config import settings
 from services.api.database import get_db
 from services.api.schemas import FileItemDTO, StatsDTO
@@ -188,13 +188,62 @@ class ArchiveRepository:
         )
 
     @classmethod
+    def _get_failed_pages(cls, conn: sqlite3.Connection, file_id: str) -> List[int]:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT page_number FROM pages
+            WHERE file_id = ? AND page_status = 'failed'
+            ORDER BY page_number ASC
+            """,
+            (file_id,),
+        )
+        return [int(r[0]) for r in cur.fetchall()]
+
+    @classmethod
+    def _find_matching_pages(
+        cls,
+        conn: sqlite3.Connection,
+        file_id: str,
+        fts_query: str,
+    ) -> tuple[Optional[int], List[int], Optional[str]]:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT CAST(page_number AS INTEGER) AS pnum,
+                   snippet(pages_fts, 2, '«', '»', '…', 20) AS page_snippet
+            FROM pages_fts
+            WHERE pages_fts MATCH ? AND file_id = ?
+            ORDER BY rank, pnum ASC
+            """,
+            (fts_query, file_id),
+        )
+        rows = cur.fetchall()
+        if not rows:
+            return None, [], None
+        matched_pages: List[int] = []
+        primary_snippet: Optional[str] = None
+        for r in rows:
+            pnum = int(r["pnum"])
+            if pnum not in matched_pages:
+                matched_pages.append(pnum)
+            if primary_snippet is None and r["page_snippet"]:
+                primary_snippet = f"صفحهٔ {pnum}: {r['page_snippet']}"
+        matched_pages.sort()
+        primary_page = int(rows[0]["pnum"])
+        return primary_page, matched_pages, primary_snippet
+
+    @classmethod
     def _row_to_dto(
         cls,
         conn: sqlite3.Connection,
         r: sqlite3.Row,
         matched_snippet: Optional[str] = None,
+        matched_page: Optional[int] = None,
+        matched_pages: Optional[List[int]] = None,
     ) -> FileItemDTO:
         tags = cls.get_file_tags(conn, r["id"])
+        failed_pages = cls._get_failed_pages(conn, r["id"])
         keys = r.keys()
         return FileItemDTO(
             id=r["id"],
@@ -239,6 +288,9 @@ class ArchiveRepository:
             error_code=(r["error_code"] if "error_code" in keys else None),
             error_message=r["error_message"],
             matched_snippet=matched_snippet,
+            matched_page=matched_page,
+            matched_pages=matched_pages or [],
+            failed_pages=failed_pages,
             is_user_modified=bool(r["is_user_modified"]) if "is_user_modified" in keys else False,
             color=r["color_scheme"] or "paper",
             tags=tags,
@@ -295,10 +347,23 @@ class ArchiveRepository:
 
                 cur.execute(sql, params)
                 rows = cur.fetchall()
-                return [
-                    cls._row_to_dto(conn, r, matched_snippet=r["matched_snippet"] or None)
-                    for r in rows
-                ]
+                results: List[FileItemDTO] = []
+                for r in rows:
+                    m_page, m_pages, page_snip = cls._find_matching_pages(conn, r["id"], fts_query)
+                    if m_page is None and (r["extracted_text"] or "").strip():
+                        m_page = 1
+                        m_pages = [1]
+                    final_snip = page_snip or r["matched_snippet"] or None
+                    results.append(
+                        cls._row_to_dto(
+                            conn,
+                            r,
+                            matched_snippet=final_snip,
+                            matched_page=m_page,
+                            matched_pages=m_pages,
+                        )
+                    )
+                return results
             else:
                 sql = """
                     SELECT f.id, f.archive_id, f.title, f.kind, f.topic, f.status,
@@ -354,6 +419,159 @@ class ArchiveRepository:
             if not r:
                 return None
             return cls._row_to_dto(conn, r)
+
+    @classmethod
+    def get_file_pages(cls, file_id: str) -> List[Any]:
+        import json as _json
+        from services.api.schemas import PageItemDTO, BoundingBoxDTO
+
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT id, file_id, page_number, raw_text, normalized_text,
+                       bboxes_json, extraction_method, page_status,
+                       error_code, error_message, ocr_confidence,
+                       width, height, is_user_modified, updated_at
+                FROM pages
+                WHERE file_id = ?
+                ORDER BY page_number ASC
+                """,
+                (file_id,),
+            )
+            rows = cur.fetchall()
+            pages_out: List[PageItemDTO] = []
+            for r in rows:
+                try:
+                    raw_boxes = _json.loads(r["bboxes_json"] or "[]")
+                    boxes = [BoundingBoxDTO(**b) for b in raw_boxes if isinstance(b, dict)]
+                except Exception:
+                    boxes = []
+                pages_out.append(
+                    PageItemDTO(
+                        id=r["id"],
+                        file_id=r["file_id"],
+                        page_number=int(r["page_number"]),
+                        raw_text=r["raw_text"] or "",
+                        normalized_text=r["normalized_text"] or "",
+                        bboxes=boxes,
+                        extraction_method=r["extraction_method"] or "direct_text",
+                        page_status=r["page_status"] or "extracted",
+                        error_code=r["error_code"],
+                        error_message=r["error_message"],
+                        ocr_confidence=float(r["ocr_confidence"]) if r["ocr_confidence"] is not None else None,
+                        width=int(r["width"]) if r["width"] is not None else None,
+                        height=int(r["height"]) if r["height"] is not None else None,
+                        is_user_modified=bool(r["is_user_modified"]),
+                        updated_at=str(r["updated_at"]) if r["updated_at"] else None,
+                    )
+                )
+            return pages_out
+
+    @classmethod
+    def update_page_text(cls, file_id: str, page_number: int, raw_text: str) -> Optional[Any]:
+        import json as _json
+        from services.ingestion.extractor import build_synthetic_line_bboxes
+
+        norm_text = normalize_persian_text(raw_text)
+        fts_norm = normalize_for_fts(norm_text)
+
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT id, title, topic FROM files WHERE id = ?", (file_id,))
+            f_row = cur.fetchone()
+            if not f_row:
+                return None
+
+            cur.execute("SELECT id FROM documents WHERE file_id = ?", (file_id,))
+            d_row = cur.fetchone()
+            if not d_row:
+                return None
+            doc_id = d_row["id"]
+
+            cur.execute(
+                "SELECT id, width, height FROM pages WHERE file_id = ? AND page_number = ?",
+                (file_id, page_number),
+            )
+            p_row = cur.fetchone()
+            w = int(p_row["width"] or 800) if p_row else 800
+            h = int(p_row["height"] or 1100) if p_row else 1100
+            bboxes = build_synthetic_line_bboxes(norm_text, w, h)
+
+            if p_row:
+                cur.execute(
+                    """
+                    UPDATE pages
+                    SET raw_text = ?,
+                        normalized_text = ?,
+                        bboxes_json = ?,
+                        page_status = 'user_modified',
+                        error_code = NULL,
+                        error_message = NULL,
+                        is_user_modified = 1,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (raw_text, norm_text, _json.dumps(bboxes, ensure_ascii=False), p_row["id"]),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO pages (
+                        id, document_id, file_id, page_number, raw_text, normalized_text,
+                        bboxes_json, extraction_method, page_status, is_user_modified,
+                        width, height, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'user_modified', 'user_modified', 1, ?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        doc_id,
+                        file_id,
+                        page_number,
+                        raw_text,
+                        norm_text,
+                        _json.dumps(bboxes, ensure_ascii=False),
+                        w,
+                        h,
+                    ),
+                )
+
+            # Rebuild `pages_fts` and `documents.extracted_text` + `files_fts` for this file
+            cur.execute(
+                "SELECT page_number, raw_text, normalized_text FROM pages WHERE file_id = ? ORDER BY page_number ASC",
+                (file_id,),
+            )
+            all_pages = cur.fetchall()
+            cur.execute("DELETE FROM pages_fts WHERE file_id = ?", (file_id,))
+            non_empty_texts: List[str] = []
+            for pr in all_pages:
+                p_norm = (pr["normalized_text"] or "").strip()
+                if p_norm:
+                    non_empty_texts.append(p_norm)
+                p_fts = normalize_for_fts(p_norm or pr["raw_text"] or "")
+                if p_fts:
+                    cur.execute(
+                        "INSERT INTO pages_fts (file_id, page_number, raw_text, normalized_text) VALUES (?, ?, ?, ?)",
+                        (file_id, int(pr["page_number"]), normalize_persian_text(pr["raw_text"] or ""), p_fts),
+                    )
+
+            combined_text = "\n\n".join(non_empty_texts)
+            cur.execute(
+                "UPDATE documents SET extracted_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (combined_text, doc_id),
+            )
+            cur.execute(
+                "UPDATE files SET is_user_modified = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (file_id,),
+            )
+            tags = cls.get_file_tags(conn, file_id)
+            cls.update_fts(conn, file_id, f_row["title"], combined_text, f_row["topic"], tags)
+
+        pages = cls.get_file_pages(file_id)
+        for p in pages:
+            if p.page_number == page_number:
+                return p
+        return None
 
     @classmethod
     def get_file_storage_path(cls, file_id: str) -> Optional[tuple[str, str, str]]:

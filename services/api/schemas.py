@@ -2,6 +2,53 @@ from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 
 
+class BoundingBoxDTO(BaseModel):
+    text: str
+    x: int
+    y: int
+    width: int
+    height: int
+    confidence: float = 100.0
+    line_num: int = 1
+    block_num: int = 1
+    direction: str = "rtl"
+
+
+class PageItemDTO(BaseModel):
+    id: str
+    file_id: str
+    page_number: int
+    raw_text: str = ""
+    normalized_text: str = ""
+    bboxes: List[BoundingBoxDTO] = Field(default_factory=list)
+    extraction_method: str = "direct_text"
+    page_status: str = "extracted"  # 'extracted' | 'empty' | 'pending_ocr' | 'failed' | 'user_modified'
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    ocr_confidence: Optional[float] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    is_user_modified: bool = False
+    updated_at: Optional[str] = None
+
+
+class PageUpdateDTO(BaseModel):
+    raw_text: str = Field(..., max_length=200000)
+
+
+class OCREngineStatusDTO(BaseModel):
+    ready: bool
+    engine_name: str
+    engine_version: str
+    model_dir: str
+    installed_languages: List[str] = Field(default_factory=list)
+    required_languages: List[str] = Field(default_factory=list)
+    missing_languages: List[str] = Field(default_factory=list)
+    offline_ready: bool = False
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+
+
 class FileItemDTO(BaseModel):
     id: str
     archive_id: str = "default"
@@ -13,7 +60,7 @@ class FileItemDTO(BaseModel):
     file_size: int
     sha256: str
     text: str = ""
-    extraction_status: str = "extracted"  # 'extracted' | 'empty' | 'pending_ocr' | 'unsupported' | 'failed' | 'queued'
+    extraction_status: str = "extracted"  # 'extracted' | 'empty' | 'pending_ocr' | 'partial_ocr' | 'unsupported' | 'failed' | 'queued'
     extraction_method: str = "direct_text"
     extraction_version: int = 1
     processing_version: int = 1
@@ -25,6 +72,9 @@ class FileItemDTO(BaseModel):
     error_code: Optional[str] = None
     error_message: Optional[str] = None
     matched_snippet: Optional[str] = None
+    matched_page: Optional[int] = None
+    matched_pages: List[int] = Field(default_factory=list)
+    failed_pages: List[int] = Field(default_factory=list)
     is_user_modified: bool = False
     color: str = "paper"
     tags: List[str] = Field(default_factory=list)
@@ -68,7 +118,11 @@ class HealthDTO(BaseModel):
     demo_mode: bool = False
     max_upload_size_bytes: int
     worker_online: bool = True
+    active_workers_count: int = 1
     resource_mode: str = "Balanced"
+    ocr_ready: bool = True
+    ocr_engine: str = "tesseract"
+    ocr_languages: List[str] = Field(default_factory=list)
 
 
 class JobEventDTO(BaseModel):

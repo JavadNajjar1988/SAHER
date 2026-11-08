@@ -1139,13 +1139,51 @@ class JobQueueRepository:
             )
 
     @classmethod
-    def list_workers(cls) -> List[WorkerInfoDTO]:
+    def log_stage_event(
+        cls,
+        job_id: str,
+        stage: str,
+        event_type: str,
+        message: str,
+        worker_id: Optional[str] = None,
+        error_code: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT state, attempt_count FROM jobs WHERE id = ?", (job_id,))
+            row = cur.fetchone()
+            if not row:
+                return
+            cls._log_event(
+                conn=conn,
+                job_id=job_id,
+                attempt_number=int(row["attempt_count"] or 1),
+                from_state=row["state"],
+                to_state=row["state"],
+                stage=stage,
+                event_type=event_type,
+                worker_id=worker_id,
+                message=message,
+                error_code=error_code,
+                details=details,
+            )
+
+    @classmethod
+    def list_workers(cls, ttl_seconds: Optional[int] = None) -> List[WorkerInfoDTO]:
+        ttl = max(5, int(ttl_seconds if ttl_seconds is not None else settings.worker_heartbeat_ttl_seconds))
         with get_db() as conn:
             cur = conn.cursor()
             cur.execute(
-                """
+                f"""
                 SELECT worker_id, resource_mode, concurrency, active_jobs,
-                       status, hostname, pid, started_at, last_heartbeat_at
+                       status, hostname, pid, started_at, last_heartbeat_at,
+                       CASE
+                           WHEN status = 'ONLINE'
+                            AND datetime(last_heartbeat_at) >= datetime('now', '-{ttl} seconds')
+                           THEN 'ONLINE'
+                           ELSE 'OFFLINE'
+                       END AS effective_status
                 FROM worker_registry
                 ORDER BY last_heartbeat_at DESC
                 """
@@ -1156,7 +1194,7 @@ class JobQueueRepository:
                     resource_mode=r["resource_mode"],
                     concurrency=r["concurrency"],
                     active_jobs=r["active_jobs"],
-                    status=r["status"],
+                    status=r["effective_status"],
                     hostname=r["hostname"],
                     pid=r["pid"],
                     started_at=str(r["started_at"]) if r["started_at"] else None,
@@ -1164,3 +1202,27 @@ class JobQueueRepository:
                 )
                 for r in cur.fetchall()
             ]
+
+    @classmethod
+    def get_online_worker_summary(
+        cls,
+        in_process_running: bool = False,
+        in_process_mode: str = "Balanced",
+        in_process_concurrency: int = 2,
+        ttl_seconds: Optional[int] = None,
+    ) -> Tuple[bool, int, str, int]:
+        """
+        Determines real worker availability across both the in-process worker and any
+        standalone worker processes (`python -m services.worker.runner` / Docker worker container)
+        via SQLite `worker_registry` heartbeats.
+        Returns: (worker_online, active_workers_count, resource_mode, concurrency)
+        """
+        workers = cls.list_workers(ttl_seconds=ttl_seconds)
+        online_workers = [w for w in workers if w.status == "ONLINE"]
+        if online_workers:
+            primary = online_workers[0]
+            return True, len(online_workers), primary.resource_mode, primary.concurrency
+        if in_process_running:
+            return True, 1, in_process_mode, in_process_concurrency
+        return False, 0, in_process_mode, in_process_concurrency
+

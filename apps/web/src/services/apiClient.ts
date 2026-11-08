@@ -289,6 +289,39 @@ export class ArchiveApiClient {
     return this.buildUrl(`/api/v1/files/${encodeURIComponent(fileId)}/content`);
   }
 
+  static async getFilePages(fileId: string): Promise<import("../types/archive").PageItem[]> {
+    return this.requestJson<import("../types/archive").PageItem[]>(
+      `/api/v1/files/${encodeURIComponent(fileId)}/pages`,
+      { method: "GET" },
+    );
+  }
+
+  static async updatePageText(
+    fileId: string,
+    pageNumber: number,
+    rawText: string,
+  ): Promise<import("../types/archive").PageItem> {
+    return this.requestJson<import("../types/archive").PageItem>(
+      `/api/v1/files/${encodeURIComponent(fileId)}/pages/${pageNumber}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ raw_text: rawText }),
+      },
+    );
+  }
+
+  static getPagePreviewUrl(fileId: string, pageNumber: number): string {
+    return this.buildUrl(`/api/v1/files/${encodeURIComponent(fileId)}/pages/${pageNumber}/preview`);
+  }
+
+  static async getOcrStatus(): Promise<import("../types/archive").OCREngineStatus> {
+    return this.requestJson<import("../types/archive").OCREngineStatus>(
+      `/api/v1/ocr/status`,
+      { method: "GET" },
+    );
+  }
+
   static async importFile(
     file: File,
     topic?: string,

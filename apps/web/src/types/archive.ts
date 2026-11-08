@@ -2,6 +2,7 @@ export type ExtractionStatus =
   | "extracted"
   | "empty"
   | "pending_ocr"
+  | "partial_ocr"
   | "unsupported"
   | "failed"
   | "queued";
@@ -27,6 +28,49 @@ export type ProcessingStage =
 
 export type ResourceMode = "Eco" | "Balanced" | "Performance";
 
+export interface BoundingBoxItem {
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  confidence: number;
+  line_num: number;
+  block_num: number;
+  direction: "rtl" | "ltr" | string;
+}
+
+export interface PageItem {
+  id: string;
+  file_id: string;
+  page_number: number;
+  raw_text: string;
+  normalized_text: string;
+  bboxes: BoundingBoxItem[];
+  extraction_method: string;
+  page_status: "extracted" | "empty" | "pending_ocr" | "failed" | "user_modified" | string;
+  error_code?: string | null;
+  error_message?: string | null;
+  ocr_confidence?: number | null;
+  width?: number | null;
+  height?: number | null;
+  is_user_modified: boolean;
+  updated_at?: string | null;
+}
+
+export interface OCREngineStatus {
+  ready: boolean;
+  engine_name: string;
+  engine_version: string;
+  model_dir: string;
+  installed_languages: string[];
+  required_languages: string[];
+  missing_languages: string[];
+  offline_ready: boolean;
+  error_code?: string | null;
+  error_message?: string | null;
+}
+
 export interface FileItem {
   id: string;
   archive_id: string;
@@ -50,6 +94,9 @@ export interface FileItem {
   error_code?: string | null;
   error_message?: string | null;
   matched_snippet?: string | null;
+  matched_page?: number | null;
+  matched_pages?: number[];
+  failed_pages?: number[];
   is_user_modified?: boolean;
   color: string;
   tags: string[];
@@ -76,7 +123,11 @@ export interface HealthResponse {
   demo_mode?: boolean;
   max_upload_size_bytes?: number;
   worker_online?: boolean;
+  active_workers_count?: number;
   resource_mode?: ResourceMode;
+  ocr_ready?: boolean;
+  ocr_engine?: string;
+  ocr_languages?: string[];
 }
 
 export interface FileUpdatePayload {
