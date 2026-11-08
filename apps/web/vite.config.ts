@@ -1,6 +1,6 @@
 import { defineConfig } from "vite";
 
-const backendTarget = process.env.SAHER_BACKEND_URL || "http://127.0.0.1:8000";
+const backendTarget = process.env.SAHER_BACKEND_URL || "http://127.0.0.1:8765";
 
 export default defineConfig({
   server: {

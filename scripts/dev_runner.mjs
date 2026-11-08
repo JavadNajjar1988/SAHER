@@ -54,11 +54,12 @@ function spawnManaged(command, args, options = {}) {
 const mode = process.argv[2] || "dev";
 const pyBin = resolvePythonBinary();
 const pyEnv = getPythonEnv();
+const apiPort = process.env.SAHER_API_PORT || "8765";
 
 if (mode === "api") {
   const proc = spawnManaged(
     pyBin,
-    ["-m", "uvicorn", "services.api.main:app", "--host", "127.0.0.1", "--port", "8000"],
+    ["-m", "uvicorn", "services.api.main:app", "--host", "127.0.0.1", "--port", apiPort],
     { env: pyEnv },
   );
   proc.on("exit", (code) => process.exit(code ?? 0));
@@ -79,19 +80,17 @@ if (mode === "api") {
   );
   proc.on("exit", (code) => process.exit(code ?? 0));
 } else if (mode === "dev") {
-  const children = [];
-
   const apiProc = spawn(
     pyBin,
-    ["-m", "uvicorn", "services.api.main:app", "--host", "127.0.0.1", "--port", "8000"],
+    ["-m", "uvicorn", "services.api.main:app", "--host", "127.0.0.1", "--port", apiPort],
     {
       cwd: rootDir,
       env: pyEnv,
-      stdio: "inherit",
+      stdio: "ignore",
       shell: isWindows,
     },
   );
-  children.push(apiProc);
+  apiProc.unref();
 
   const npmCmd = isWindows ? "npm.cmd" : "npm";
   const webProc = spawn(
@@ -99,18 +98,20 @@ if (mode === "api") {
     ["run", "dev", "--workspace=apps/web"],
     {
       cwd: rootDir,
-      env: process.env,
+      env: {
+        ...process.env,
+        SAHER_BACKEND_URL: process.env.SAHER_BACKEND_URL || `http://127.0.0.1:${apiPort}`,
+      },
       stdio: "inherit",
       shell: isWindows,
     },
   );
-  children.push(webProc);
 
   let shuttingDown = false;
   function shutdownAll(exitCode = 0) {
     if (shuttingDown) return;
     shuttingDown = true;
-    for (const child of children) {
+    for (const child of [webProc, apiProc]) {
       if (child && !child.killed) {
         try {
           child.kill("SIGTERM");
@@ -126,11 +127,6 @@ if (mode === "api") {
   process.on("SIGTERM", () => shutdownAll(0));
 
   webProc.on("exit", (code) => shutdownAll(code ?? 0));
-  apiProc.on("exit", (code) => {
-    if (code && code !== 0 && !shuttingDown) {
-      console.error(`[SAHER] FastAPI backend exited with code ${code}`);
-    }
-  });
 } else {
   console.error(`Unknown dev_runner command: ${mode}`);
   process.exit(1);

@@ -12,6 +12,8 @@ def _parse_origins_env() -> List[str]:
         "http://127.0.0.1:5173",
         "http://localhost:8000",
         "http://127.0.0.1:8000",
+        "http://localhost:8765",
+        "http://127.0.0.1:8765",
         "app://.",
     ]
     raw_env = os.environ.get("SAHER_ALLOWED_ORIGINS", "")
@@ -60,7 +62,9 @@ class Settings(BaseModel):
 
     # Server & Local Security settings
     host: str = "127.0.0.1"
-    port: int = 8000
+    port: int = Field(
+        default_factory=lambda: int(os.environ.get("SAHER_API_PORT", "8765"))
+    )
     cors_origins: list[str] = Field(default_factory=_parse_origins_env)
 
     # Session authentication for Electron / local desktop backend
