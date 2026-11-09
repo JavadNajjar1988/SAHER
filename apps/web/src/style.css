@@ -2054,3 +2054,248 @@ footer {
     grid-template-columns: 1fr;
   }
 }
+
+/* ==========================================================================
+   Two-Level Screenshot Classification (Priority 1: Username/ID -> Priority 2: 12 Categories)
+   ========================================================================== */
+
+.taxonomy-reference-line {
+  margin-bottom: 16px;
+  padding: 11px 14px;
+  background: #f4f8f7;
+  border: 1px solid #d5e5e1;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.75;
+  color: #1f3d38;
+}
+
+.taxonomy-reference-line strong {
+  color: #163630;
+}
+
+.hierarchy-tree-panel {
+  background: #ffffff;
+  border: 1px solid #dde6e5;
+  border-radius: 14px;
+  padding: 18px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.hierarchy-tree-panel h4 {
+  margin: 0;
+  font-size: 14px;
+  color: #183631;
+}
+
+.hierarchy-account-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 12px;
+}
+
+.hierarchy-account-card {
+  background: #f8fbfa;
+  border: 1px solid #d7e4e1;
+  border-radius: 11px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hierarchy-account-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.hierarchy-account-btn {
+  width: 100%;
+  text-align: right;
+  padding: 7px 11px;
+  border-radius: 8px;
+  border: 1px solid #bfd4cf;
+  background: #ffffff;
+  color: #193a35;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.hierarchy-account-btn:hover {
+  border-color: #245c53;
+  background: #eef7f5;
+}
+
+.hierarchy-account-btn.active {
+  background: #1e4d44;
+  border-color: #1e4d44;
+  color: #ffffff;
+}
+
+.hierarchy-subcats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.hierarchy-subcat-btn {
+  padding: 5px 10px;
+  border-radius: 7px;
+  border: 1px solid #cddbd8;
+  background: #ffffff;
+  color: #2f4b47;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+
+.hierarchy-subcat-btn:hover {
+  border-color: #245c53;
+  color: #1d4c43;
+}
+
+.hierarchy-subcat-btn.active {
+  background: #245c53;
+  border-color: #245c53;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.filter-bar-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #1f3c38;
+  margin-left: 4px;
+}
+
+.batch-header-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 310px;
+}
+
+/* ==========================================================================
+   Cultural & Social Structured Report Template (قواره ویژه فرهنگی و اجتماعی)
+   ========================================================================== */
+
+.cultural-social-template-box {
+  background: #f2f8f6;
+  border: 1.5px solid #245c53;
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.cultural-social-template-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.cultural-social-template-header strong {
+  font-size: 13px;
+  color: #163d36;
+}
+
+.copy-template-btn {
+  background: #1e4d44 !important;
+  color: #ffffff !important;
+  border-color: #1e4d44 !important;
+  font-weight: 600;
+  padding: 6px 13px !important;
+  font-size: 11.5px !important;
+}
+
+.copy-template-btn:hover {
+  background: #153831 !important;
+}
+
+.cultural-social-fields-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.cultural-social-fields-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #264843;
+}
+
+.cultural-social-fields-grid input {
+  padding: 7px 10px;
+  border: 1px solid #bdd2ce;
+  border-radius: 7px;
+  font-family: inherit;
+  font-size: 12px;
+  background: #ffffff;
+  color: #193538;
+}
+
+.cultural-social-fields-grid .hashtags-field-wide {
+  grid-column: 1 / -1;
+}
+
+.cultural-social-template-preview {
+  margin: 0;
+  padding: 12px 14px;
+  background: #ffffff;
+  border: 1px dashed #9fc0b9;
+  border-radius: 9px;
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.9;
+  color: #162e2b;
+  white-space: pre-wrap;
+  direction: rtl;
+  text-align: right;
+  flex: 1;
+}
+
+.template-copy-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dual-templates-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.single-template-column {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.single-template-badge {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #1b4f45;
+}
+
+@media (max-width: 900px) {
+  .cultural-social-fields-grid {
+    grid-template-columns: 1fr;
+  }
+  .dual-templates-preview-grid {
+    grid-template-columns: 1fr;
+  }
+}

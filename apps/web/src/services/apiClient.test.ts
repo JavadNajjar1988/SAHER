@@ -357,7 +357,7 @@ test("ArchiveApiClient analyzes image folders and exports Word (.docx) reports",
     const folderRes = await ArchiveApiClient.analyzeImageFolder(
       [dummyFile],
       "پوشه فاکتورها",
-      ["invoices/invoice_scan.png"],
+      "https://www.instagram.com/mira_rjbpr?stkn=YzM4MWNpN3Y2a3Vy",
     );
     assert.equal(folderRes.total_images, 1);
     assert.equal(folderRes.items[0].detected_topic, "مالی و حسابداری");
@@ -366,6 +366,9 @@ test("ArchiveApiClient analyzes image folders and exports Word (.docx) reports",
     const wordBlob = await ArchiveApiClient.downloadImagesWordReport(
       ["img-101"],
       "پوشه فاکتورها",
+      {
+        sourceUrl: "https://www.instagram.com/mira_rjbpr?stkn=YzM4MWNpN3Y2a3Vy",
+      },
     );
     assert.ok(wordBlob.size > 0);
 
@@ -375,3 +378,4 @@ test("ArchiveApiClient analyzes image folders and exports Word (.docx) reports",
     globalThis.fetch = originalFetch;
   }
 });
+

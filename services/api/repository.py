@@ -5,7 +5,7 @@ import zlib
 import struct
 import hashlib
 import sqlite3
-from typing import List, Optional, AsyncIterator, Any
+from typing import Dict, List, Optional, AsyncIterator, Any
 from services.api.config import settings
 from services.api.database import get_db
 from services.api.schemas import FileItemDTO, StatsDTO
@@ -990,6 +990,8 @@ class ArchiveRepository:
         file_id: str,
         relative_path: str = "",
         auto_update_metadata: bool = False,
+        source_url: str = "",
+        template_overrides: Optional[Dict[str, Any]] = None,
     ):
         """
         Computes a comprehensive visual + textual nature & topic analysis for a stored archive file/image.
@@ -1015,6 +1017,17 @@ class ArchiveRepository:
 
         avg_conf = round(sum(confs) / len(confs), 1) if confs else None
 
+        # Preserve any previously saved account identity or URL tags (from folder upload) during subsequent re-analysis / Word export
+        effective_rel_path = relative_path or file_item.title
+        effective_source_url = (source_url or "").strip()
+        for t in file_item.tags or []:
+            if t.startswith("آیدی:") and "/" not in effective_rel_path:
+                saved_id = t.replace("آیدی:", "").strip()
+                if saved_id:
+                    effective_rel_path = f"{saved_id}/{effective_rel_path}"
+            elif t.startswith("لینک:") and not effective_source_url:
+                effective_source_url = t.replace("لینک:", "").strip()
+
         result = analyze_image_nature_and_topic(
             file_id=file_item.id,
             title=file_item.title,
@@ -1024,7 +1037,9 @@ class ArchiveRepository:
             extracted_text=file_item.text or "",
             bboxes=bboxes_combined,
             ocr_confidence=avg_conf,
-            relative_path=relative_path or file_item.title,
+            relative_path=effective_rel_path,
+            source_url=effective_source_url,
+            template_overrides=template_overrides,
         )
 
         if auto_update_metadata and not file_item.is_user_modified:
@@ -1032,20 +1047,25 @@ class ArchiveRepository:
             for t in result.tags:
                 if t not in merged_tags:
                     merged_tags.append(t)
+            if effective_source_url:
+                url_tag = f"لینک: {effective_source_url}"
+                if url_tag not in merged_tags:
+                    merged_tags.append(url_tag)
             with get_db() as conn:
                 conn.execute(
                     "UPDATE files SET topic = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     (result.detected_topic, file_id),
                 )
-                cls.set_file_tags(conn, file_id, merged_tags[:8])
+                cls.set_file_tags(conn, file_id, merged_tags[:10])
                 cls.update_fts(
                     conn,
                     file_id,
                     file_item.title,
                     file_item.text or "",
                     result.detected_topic,
-                    merged_tags[:8],
+                    merged_tags[:10],
                 )
 
         return result
+
 

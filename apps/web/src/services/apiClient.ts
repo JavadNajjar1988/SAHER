@@ -477,6 +477,7 @@ export class ArchiveApiClient {
   static async analyzeImageFolder(
     files: File[],
     folderName?: string,
+    sourceUrl?: string,
   ): Promise<import("../types/archive").FolderAnalysisResponse> {
     const formData = new FormData();
     const relPaths: string[] = [];
@@ -487,6 +488,9 @@ export class ArchiveApiClient {
     }
     if (folderName) {
       formData.append("folder_name", folderName);
+    }
+    if (sourceUrl && sourceUrl.trim()) {
+      formData.append("source_url", sourceUrl.trim());
     }
     formData.append("relative_paths", JSON.stringify(relPaths));
 
@@ -503,6 +507,7 @@ export class ArchiveApiClient {
   static async analyzeExistingImages(
     fileIds: string[],
     folderName?: string,
+    sourceUrl?: string,
   ): Promise<import("../types/archive").FolderAnalysisResponse> {
     return this.requestJson<import("../types/archive").FolderAnalysisResponse>(
       `/api/v1/images/analyze-existing`,
@@ -512,6 +517,7 @@ export class ArchiveApiClient {
         body: JSON.stringify({
           file_ids: fileIds,
           folder_name: folderName || "تصاویر منتخب کتابخانه",
+          source_url: sourceUrl?.trim() || null,
         }),
       },
       90000,
@@ -521,6 +527,10 @@ export class ArchiveApiClient {
   static async downloadImagesWordReport(
     fileIds: string[],
     folderName?: string,
+    options?: {
+      sourceUrl?: string;
+      templateOverridesByFile?: Record<string, Record<string, unknown>>;
+    },
   ): Promise<Blob> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -536,6 +546,8 @@ export class ArchiveApiClient {
       body: JSON.stringify({
         file_ids: fileIds,
         folder_name: folderName || "پوشهٔ تصاویر انتخابی",
+        source_url: options?.sourceUrl?.trim() || null,
+        template_overrides_by_file: options?.templateOverridesByFile || null,
       }),
     });
 

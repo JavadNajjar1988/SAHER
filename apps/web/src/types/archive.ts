@@ -249,6 +249,39 @@ export interface LegacyMigrationResult {
   message: string;
 }
 
+export const THEMATIC_CATEGORIES_12: readonly string[] = [
+  "اجتماعی",
+  "اقتصادی",
+  "امنیتی",
+  "جاسوسی",
+  "دفاعی (نظامی، کویر و مرز)",
+  "دین و روحانیت",
+  "رزمایش",
+  "سایبری",
+  "سیاسی",
+  "علم و فناوری",
+  "فرهنگی",
+  "هواگرد (پهپاد، ریزپرنده، جنگنده و ...)",
+];
+
+export interface CulturalSocialTemplateFields {
+  full_name: string;
+  national_id: string;
+  phone_number: string;
+  guidance_date?: string;
+  numeric_id?: string;
+  account_handle?: string;
+  description?: string;
+  city_hashtag?: string;
+  occupation: string;
+  violation: string;
+  action_request: string;
+  profile_url: string;
+  hashtags: string[];
+  cultural_template_text?: string;
+  social_template_text?: string;
+}
+
 export interface ImageAnalysisItem {
   file_id: string;
   title: string;
@@ -272,17 +305,27 @@ export interface ImageAnalysisItem {
   bbox_count: number;
   ocr_confidence?: number | null;
   extracted_text: string;
+  account_id?: string;
+  account_username?: string;
+  account_label?: string;
+  platform_source?: string;
+  thematic_category?: string;
   image_nature: string;
   detected_topic: string;
   confidence_label: string;
   tags: string[];
   key_findings: string[];
   analysis_summary: string;
+  template_applicable?: boolean;
+  template_fields?: CulturalSocialTemplateFields | null;
+  formatted_template_text?: string;
 }
 
 export interface FolderAnalysisResponse {
   folder_name: string;
   total_images: number;
+  account_breakdown?: Record<string, number>;
+  account_category_tree?: Record<string, Record<string, number>>;
   topic_breakdown: Record<string, number>;
   nature_breakdown: Record<string, number>;
   items: ImageAnalysisItem[];

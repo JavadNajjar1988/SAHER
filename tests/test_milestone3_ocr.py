@@ -472,87 +472,115 @@ def test_m3_standalone_worker_health_reporting():
 
 def test_m3_image_folder_analysis_and_word_report_export():
     """Verify:
-    1. Uploading a folder of multiple images (POST /api/v1/images/analyze-folder) analyzes each image
-       individually for its visual/structural nature (image_nature) and content topic (detected_topic).
+    1. Uploading a folder of multiple screenshots/images (POST /api/v1/images/analyze-folder) classifies each image
+       in two priority levels:
+       - Priority 1: Username and Account ID (account_id, account_username, account_label, platform_source)
+       - Priority 2: The 12 thematic categories (اجتماعی، اقتصادی، امنیتی، جاسوسی، دفاعی (نظامی، کویر و مرز)،
+         دین و روحانیت، رزمایش، سایبری، سیاسی، علم و فناوری، فرهنگی، هواگرد (پهپاد، ریزپرنده، جنگنده و ...))
     2. Exporting the analyzed images to Word (POST /api/v1/images/export-word) and single-file Word
-       (GET /api/v1/files/{id}/export-word) produces a valid .docx document containing a separate
-       analytical section and embedded thumbnail for each image.
+       (GET /api/v1/files/{id}/export-word) produces a valid .docx document containing the Priority-1 -> Priority-2
+       hierarchy table, overview table, and per-image analytical sections with embedded thumbnails.
     """
     import json
     import docx
 
-    # Image 1: Scanned Persian financial invoice
-    pil_invoice = _render_persian_page_image([
-        "فاکتور رسمی فروش و صورتحساب مالی",
-        "مبلغ کل قابل پرداخت و مالیات ارزش افزوده",
+    # Image 1: Screenshot with @aero_watch_ir handle about drones/UAVs -> هواگرد (پهپاد، ریزپرنده، جنگنده و ...)
+    pil_aerospace = _render_persian_page_image([
+        "کانال رسمی پایش هوافضا @aero_watch_ir",
+        "پرواز آزمایشی پهپاد شناسایی و ریزپرنده رزمی بر فراز منطقه",
     ])
-    buf_inv = io.BytesIO()
-    pil_invoice.save(buf_inv, format="PNG")
-    img_invoice = buf_inv.getvalue()
+    buf_aero = io.BytesIO()
+    pil_aerospace.save(buf_aero, format="PNG")
+    img_aerospace = buf_aero.getvalue()
 
-    # Image 2: Scanned Persian legal contract
-    pil_contract = _render_persian_page_image([
-        "قرارداد همکاری و تفاهم‌نامه حقوقی",
-        "ماده اول تعهدات طرفین و شرایط فسخ قرارداد",
+    # Image 2: Screenshot from @aero_watch_ir about military desert/border exercise -> دفاعی (نظامی، کویر و مرز) or رزمایش
+    pil_defense = _render_persian_page_image([
+        "آیدی: @aero_watch_ir",
+        "پایش مرز و کویر توسط یگان زرهی و پدافند نظامی مرزبانی",
     ])
-    buf_con = io.BytesIO()
-    pil_contract.save(buf_con, format="PNG")
-    img_contract = buf_con.getvalue()
+    buf_def = io.BytesIO()
+    pil_defense.save(buf_def, format="PNG")
+    img_defense = buf_def.getvalue()
 
-    # Image 3: Colorful visual landscape / graphic illustration (no text, rich colors)
-    pil_graphic = Image.new("RGB", (900, 500), (35, 125, 190))
-    draw = ImageDraw.Draw(pil_graphic)
-    draw.rectangle([40, 40, 860, 460], fill=(42, 165, 130), outline=(245, 200, 70), width=6)
-    draw.ellipse([300, 120, 600, 380], fill=(230, 110, 65))
-    buf_graphic = io.BytesIO()
-    pil_graphic.save(buf_graphic, format="PNG")
-    img_graphic = buf_graphic.getvalue()
+    # Image 3: Screenshot from @econ_daily_ir about financial invoice / inflation -> اقتصادی
+    pil_economy = _render_persian_page_image([
+        "t.me/econ_daily_ir",
+        "فاکتور رسمی فروش و صورتحساب مالی بازار ارز و تورم بانکی",
+    ])
+    buf_econ = io.BytesIO()
+    pil_economy.save(buf_econ, format="PNG")
+    img_economy = buf_econ.getvalue()
+
+    # Image 4: Screenshot from @cyber_sec_ir about cyber attack & hacking -> سایبری
+    pil_cyber = _render_persian_page_image([
+        "نام کاربری: cyber_sec_ir",
+        "هشدار حمله سایبری، بدافزار باج‌افزار و نفوذ هکرها به سرور شبکه",
+    ])
+    buf_cyb = io.BytesIO()
+    pil_cyber.save(buf_cyb, format="PNG")
+    img_cyber = buf_cyb.getvalue()
 
     with TestClient(app) as client:
         rel_paths = json.dumps([
-            "archive_2026/finance/invoice_01.png",
-            "archive_2026/legal/contract_02.png",
-            "archive_2026/media/landscape_photo.png",
+            "screenshots/@aero_watch_ir/uav_flight_01.png",
+            "screenshots/@aero_watch_ir/border_desert_02.png",
+            "screenshots/@econ_daily_ir/invoice_03.png",
+            "screenshots/@cyber_sec_ir/ransomware_04.png",
         ])
         resp = client.post(
             "/api/v1/images/analyze-folder",
             files=[
-                ("files", ("invoice_01.png", img_invoice, "image/png")),
-                ("files", ("contract_02.png", img_contract, "image/png")),
-                ("files", ("landscape_photo.png", img_graphic, "image/png")),
+                ("files", ("uav_flight_01.png", img_aerospace, "image/png")),
+                ("files", ("border_desert_02.png", img_defense, "image/png")),
+                ("files", ("invoice_03.png", img_economy, "image/png")),
+                ("files", ("ransomware_04.png", img_cyber, "image/png")),
             ],
             data={
-                "folder_name": "پوشه اسناد و تصاویر آزمایشی",
+                "folder_name": "پوشه اسکرین‌شات‌های آزمایشی دو سطحی",
                 "relative_paths": rel_paths,
             },
         )
         assert resp.status_code == 200, resp.text
         data = resp.json()
-        assert data["folder_name"] == "پوشه اسناد و تصاویر آزمایشی"
-        assert data["total_images"] == 3
+        assert data["folder_name"] == "پوشه اسکرین‌شات‌های آزمایشی دو سطحی"
+        assert data["total_images"] == 4
         items = data["items"]
-        assert len(items) == 3
+        assert len(items) == 4
 
-        # Image 1 should be classified as Financial topic & invoice nature
-        assert items[0]["detected_topic"] == "مالی و حسابداری"
-        assert "فاکتور" in items[0]["image_nature"] or "مالی" in items[0]["image_nature"]
-        assert items[0]["relative_path"] == "archive_2026/finance/invoice_01.png"
+        # Verify Priority 1 (Username & ID) extraction
+        assert items[0]["account_id"] == "@aero_watch_ir"
+        assert items[1]["account_id"] == "@aero_watch_ir"
+        assert items[2]["account_id"] == "@econ_daily_ir"
+        assert items[3]["account_id"] == "@cyber_sec_ir"
 
-        # Image 2 should be classified as Legal/Contracts topic & official/contract scan nature
-        assert items[1]["detected_topic"] == "حقوقی و قراردادها"
-        assert "قرارداد" in items[1]["image_nature"] or "رسمی" in items[1]["image_nature"]
+        # Verify Priority 2 (12 Thematic Categories) classification
+        assert items[0]["thematic_category"] == "هواگرد (پهپاد، ریزپرنده، جنگنده و ...)"
+        assert items[0]["detected_topic"] == "هواگرد (پهپاد، ریزپرنده، جنگنده و ...)"
 
-        # Image 3 has no text and rich saturation -> Photography/General images or Graphic
-        assert items[2]["detected_topic"] in ("عکاسی و تصاویر عمومی", "طراحی و گرافیک")
-        assert len(items[2]["key_findings"]) >= 3
+        assert items[1]["thematic_category"] == "دفاعی (نظامی، کویر و مرز)"
+        assert items[1]["detected_topic"] == "دفاعی (نظامی، کویر و مرز)"
 
-        # Now export all 3 analyzed images to a single Word (.docx) file
+        assert items[2]["thematic_category"] == "اقتصادی"
+        assert items[2]["detected_topic"] == "اقتصادی"
+
+        assert items[3]["thematic_category"] == "سایبری"
+        assert items[3]["detected_topic"] == "سایبری"
+
+        # Verify Priority-1 account_breakdown and two-level account_category_tree
+        assert "account_breakdown" in data
+        assert "account_category_tree" in data
+        aero_label = items[0]["account_label"]
+        assert data["account_breakdown"][aero_label] == 2
+        assert data["account_category_tree"][aero_label]["هواگرد (پهپاد، ریزپرنده، جنگنده و ...)"] == 1
+        assert data["account_category_tree"][aero_label]["دفاعی (نظامی، کویر و مرز)"] == 1
+
+        # Now export all 4 analyzed screenshots to a single Word (.docx) file
         file_ids = [it["file_id"] for it in items]
         word_resp = client.post(
             "/api/v1/images/export-word",
             json={
                 "file_ids": file_ids,
-                "folder_name": "پوشه اسناد و تصاویر آزمایشی",
+                "folder_name": "پوشه اسکرین‌شات‌های آزمایشی دو سطحی",
             },
         )
         assert word_resp.status_code == 200
@@ -562,20 +590,26 @@ def test_m3_image_folder_analysis_and_word_report_export():
         )
         assert len(word_resp.content) > 5000
 
-        # Parse the generated .docx with python-docx and verify per-image sections & embedded pictures
+        # Parse the generated .docx with python-docx and verify Priority 1, Priority 2, and embedded pictures
         doc = docx.Document(io.BytesIO(word_resp.content))
         all_paragraphs_text = "\n".join(p.text for p in doc.paragraphs)
-        assert "پوشه اسناد و تصاویر آزمایشی" in all_paragraphs_text
-        assert "تصویر شمارهٔ 1: invoice_01" in all_paragraphs_text
-        assert "تصویر شمارهٔ 2: contract_02" in all_paragraphs_text
-        assert "تصویر شمارهٔ 3: landscape_photo" in all_paragraphs_text
-        assert "مالی و حسابداری" in all_paragraphs_text
-        assert "حقوقی و قراردادها" in all_paragraphs_text
+        all_tables_text = "\n".join(
+            cell.text for table in doc.tables for row in table.rows for cell in row.cells
+        )
+        combined_text = all_paragraphs_text + "\n" + all_tables_text
+        assert "پوشه اسکرین‌شات‌های آزمایشی دو سطحی" in combined_text
+        assert "اولویت اول دسته‌بندی (نام کاربری و آیدی)" in combined_text
+        assert "اولویت دوم دسته‌بندی (۱۲ سرفصل موضوعی)" in combined_text
+        assert "@aero_watch_ir" in combined_text
+        assert "هواگرد (پهپاد، ریزپرنده، جنگنده و ...)" in combined_text
+        assert "دفاعی (نظامی، کویر و مرز)" in combined_text
+        assert "اقتصادی" in combined_text
+        assert "سایبری" in combined_text
 
-        # Verify all 3 images are embedded as inline shapes in the Word document
-        assert len(doc.inline_shapes) == 3
-        # Verify summary table + 3 per-image specification tables = 4 tables
-        assert len(doc.tables) == 4
+        # Verify all 4 images are embedded as inline shapes in the Word document
+        assert len(doc.inline_shapes) == 4
+        # Verify 1 hierarchical tree table + 1 overview table + 4 per-image specification tables = 6 tables
+        assert len(doc.tables) == 6
 
         # Verify single-file Word export endpoint as well
         single_word = client.get(f"/api/v1/files/{file_ids[0]}/export-word")
@@ -583,4 +617,170 @@ def test_m3_image_folder_analysis_and_word_report_export():
         single_doc = docx.Document(io.BytesIO(single_word.content))
         assert len(single_doc.inline_shapes) == 1
 
+        # Verify that non-Cultural/Social categories (هواگرد، دفاعی، اقتصادی، سایبری) do NOT activate the template
+        for it in items:
+            assert it["template_applicable"] is False
+            assert it["formatted_template_text"] == ""
 
+
+def test_m3_cultural_and_social_instagram_template_completion_and_word_export():
+    """Verify:
+    For Cultural (فرهنگی) and Social (اجتماعی) categories ONLY, the system extracts and completes
+    both structured report templates (قواره‌های فرهنگی و اجتماعی) from the screenshots and Instagram URL:
+    1) Cultural template (قواره فرهنگی):
+      نام و نام خانوادگی: ...
+      کدملی: ...
+      شماره تماس: ...
+      شغل: ...
+      تخلف: ترویج ابتذال
+      درخواست مسدودی سیم کارت
+      https://www.instagram.com/mira_rjbpr?stkn=YzM4MWNpN3Y2a3Vy
+
+      #ابتذال
+      #خراسان_رضوی
+      #شهرستان_کاشمر
+
+    2) Social blocking template (قواره اجتماعی):
+      〰️〰️〰️〰️〰️〰️〰️〰️〰️
+      #مسدودسازی
+      #اینستاگرام
+
+      ✅نام و نام خانوادگی:
+      ✅کدملی:
+      ✅ شماره تماس/حساب:
+      ✅ تاریخ ارشاد:
+      ✅ آیدی عددی:
+      ✅ آدرس اینترنتی:
+      @mira_rjbpr
+      توضیحات:
+
+      #کاشمر
+      〰️〰️〰️〰️〰️〰️〰️〰️〰️
+    """
+    import json
+    import docx
+
+    ig_url = "https://www.instagram.com/mira_rjbpr?stkn=YzM4MWNpN3Y2a3Vy"
+
+    # Screenshot 1 of @mira_rjbpr: Instagram profile bio + occupation + cultural keywords
+    pil_shot1 = _render_persian_page_image([
+        "نام و نام خانوادگی: میرا رجب‌پور",
+        "شغل: بلاگر و مدلینگ استوری اینستاگرام",
+        "تخلف: ترویج ابتذال در فضای مجازی شهرستان کاشمر",
+    ])
+    buf1 = io.BytesIO()
+    pil_shot1.save(buf1, format="PNG")
+    img_shot1 = buf1.getvalue()
+
+    # Screenshot 2 of @mira_rjbpr: Social blocking info (National ID, Phone/Account, Guidance Date, Numeric ID)
+    pil_shot2 = _render_persian_page_image([
+        "کدملی: 0921456789",
+        "شماره تماس/حساب: 09153456789",
+        "تاریخ ارشاد: 1405/08/14",
+        "آیدی عددی: 583920147",
+        "استان خراسان رضوی شهرستان کاشمر درخواست مسدودی سیم کارت",
+    ])
+    buf2 = io.BytesIO()
+    pil_shot2.save(buf2, format="PNG")
+    img_shot2 = buf2.getvalue()
+
+    with TestClient(app) as client:
+        rel_paths = json.dumps([
+            "instagram/@mira_rjbpr/profile_shot_01.png",
+            "instagram/@mira_rjbpr/identity_shot_02.png",
+        ])
+        resp = client.post(
+            "/api/v1/images/analyze-folder",
+            files=[
+                ("files", ("profile_shot_01.png", img_shot1, "image/png")),
+                ("files", ("identity_shot_02.png", img_shot2, "image/png")),
+            ],
+            data={
+                "folder_name": "پرونده فرهنگی و اجتماعی کاشمر",
+                "relative_paths": rel_paths,
+                "source_url": ig_url,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["total_images"] == 2
+        items = data["items"]
+
+        # Both screenshots belong to @mira_rjbpr and classify into فرهنگی or اجتماعی
+        for it in items:
+            assert it["account_id"] == "@mira_rjbpr"
+            assert it["thematic_category"] in ("فرهنگی", "اجتماعی")
+            assert it["template_applicable"] is True
+            tf = it["template_fields"]
+            assert tf is not None
+            # Merged across both screenshots of @mira_rjbpr:
+            assert "0921456789" in tf["national_id"]
+            assert "09153456789" in tf["phone_number"]
+            assert "1405/08/14" in tf["guidance_date"]
+            assert "583920147" in tf["numeric_id"]
+            assert tf["account_handle"] == "@mira_rjbpr"
+            assert tf["city_hashtag"] == "#کاشمر"
+            assert tf["occupation"] != ""
+            assert "ترویج ابتذال" in tf["violation"]
+            assert tf["action_request"] == "درخواست مسدودی سیم کارت"
+            assert tf["profile_url"] == ig_url
+            assert "#ابتذال" in tf["hashtags"]
+            assert "#خراسان_رضوی" in tf["hashtags"]
+            assert "#شهرستان_کاشمر" in tf["hashtags"]
+
+            tpl_text = it["formatted_template_text"]
+            # Check Cultural Template (قواره فرهنگی)
+            assert "نام و نام خانوادگی:" in tpl_text
+            assert "کدملی: 0921456789" in tpl_text
+            assert "شماره تماس: 09153456789" in tpl_text
+            assert "تخلف: ترویج ابتذال" in tpl_text
+            assert "درخواست مسدودی سیم کارت" in tpl_text
+            assert ig_url in tpl_text
+            assert "#ابتذال" in tpl_text
+            assert "#خراسان_رضوی" in tpl_text
+            assert "#شهرستان_کاشمر" in tpl_text
+
+            # Check Social Blocking Template (قواره اجتماعی)
+            assert "〰️〰️〰️〰️〰️〰️〰️〰️〰️" in tpl_text
+            assert "#مسدودسازی" in tpl_text
+            assert "#اینستاگرام" in tpl_text
+            assert "✅نام و نام خانوادگی:" in tpl_text
+            assert "✅کدملی: 0921456789" in tpl_text
+            assert "✅ شماره تماس/حساب: 09153456789" in tpl_text
+            assert "✅ تاریخ ارشاد: 1405/08/14" in tpl_text
+            assert "✅ آیدی عددی: 583920147" in tpl_text
+            assert "✅ آدرس اینترنتی:" in tpl_text
+            assert "@mira_rjbpr" in tpl_text
+            assert "توضیحات:" in tpl_text
+            assert "#کاشمر" in tpl_text
+
+        # Export to Word (.docx) and verify both completed Cultural & Social templates are inside the Word report
+        file_ids = [it["file_id"] for it in items]
+        word_resp = client.post(
+            "/api/v1/images/export-word",
+            json={
+                "file_ids": file_ids,
+                "folder_name": "پرونده فرهنگی و اجتماعی کاشمر",
+                "source_url": ig_url,
+            },
+        )
+        assert word_resp.status_code == 200
+        doc = docx.Document(io.BytesIO(word_resp.content))
+        doc_text = "\n".join(p.text for p in doc.paragraphs)
+        assert "قوارهٔ تکمیل‌شده ویژهٔ دسته‌بندی" in doc_text
+        assert "کدملی: 0921456789" in doc_text
+        assert "شماره تماس: 09153456789" in doc_text
+        assert "تخلف: ترویج ابتذال" in doc_text
+        assert "درخواست مسدودی سیم کارت" in doc_text
+        assert ig_url in doc_text
+        assert "#ابتذال" in doc_text
+        assert "#خراسان_رضوی" in doc_text
+        assert "#شهرستان_کاشمر" in doc_text
+        assert "〰️〰️〰️〰️〰️〰️〰️〰️〰️" in doc_text
+        assert "#مسدودسازی" in doc_text
+        assert "#اینستاگرام" in doc_text
+        assert "✅ شماره تماس/حساب: 09153456789" in doc_text
+        assert "✅ تاریخ ارشاد: 1405/08/14" in doc_text
+        assert "✅ آیدی عددی: 583920147" in doc_text
+        assert "@mira_rjbpr" in doc_text
+        assert "#کاشمر" in doc_text

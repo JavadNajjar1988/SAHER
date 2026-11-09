@@ -611,12 +611,53 @@ def _build_folder_analysis_response(
     analyses_raw: List,
     folder_name: str,
 ) -> FolderAnalysisResponseDTO:
+    from services.analysis.image_analyzer import merge_batch_cultural_social_templates
+
+    account_breakdown: Dict[str, int] = {}
+    account_category_tree: Dict[str, Dict[str, int]] = {}
     topic_breakdown: Dict[str, int] = {}
     nature_breakdown: Dict[str, int] = {}
     dto_items: List[ImageAnalysisItemDTO] = []
 
+    # Unify Priority-1 account_label and account_username for screenshots sharing the same canonical account_id
+    canonical_labels: Dict[str, str] = {}
+    canonical_usernames: Dict[str, str] = {}
     for item in analyses_raw:
-        topic_breakdown[item.detected_topic] = topic_breakdown.get(item.detected_topic, 0) + 1
+        acc_id = (getattr(item, "account_id", "") or "").strip()
+        if acc_id and acc_id != "نامشخص":
+            key = acc_id.lower()
+            lbl = getattr(item, "account_label", "") or acc_id
+            uname = getattr(item, "account_username", "") or ""
+            if key not in canonical_labels or len(lbl) > len(canonical_labels[key]):
+                canonical_labels[key] = lbl
+            if key not in canonical_usernames or (
+                uname and uname.lower() != acc_id.lstrip("@").lower() and len(uname) > len(canonical_usernames.get(key, ""))
+            ):
+                canonical_usernames[key] = uname
+
+    for item in analyses_raw:
+        acc_id = (getattr(item, "account_id", "") or "").strip()
+        if acc_id and acc_id != "نامشخص":
+            key = acc_id.lower()
+            if key in canonical_labels:
+                item.account_label = canonical_labels[key]
+            if key in canonical_usernames and canonical_usernames[key]:
+                item.account_username = canonical_usernames[key]
+
+    merge_batch_cultural_social_templates(analyses_raw)
+
+    for item in analyses_raw:
+        acc_label = getattr(item, "account_label", None) or "بدون نام کاربری / آیدی مشخص"
+        cat_label = getattr(item, "thematic_category", None) or item.detected_topic
+
+        account_breakdown[acc_label] = account_breakdown.get(acc_label, 0) + 1
+        if acc_label not in account_category_tree:
+            account_category_tree[acc_label] = {}
+        account_category_tree[acc_label][cat_label] = (
+            account_category_tree[acc_label].get(cat_label, 0) + 1
+        )
+
+        topic_breakdown[cat_label] = topic_breakdown.get(cat_label, 0) + 1
         nature_breakdown[item.image_nature] = nature_breakdown.get(item.image_nature, 0) + 1
         d = asdict(item)
         d.pop("image_path", None)
@@ -625,6 +666,8 @@ def _build_folder_analysis_response(
     return FolderAnalysisResponseDTO(
         folder_name=folder_name or "پوشهٔ تصاویر انتخابی",
         total_images=len(dto_items),
+        account_breakdown=account_breakdown,
+        account_category_tree=account_category_tree,
         topic_breakdown=topic_breakdown,
         nature_breakdown=nature_breakdown,
         items=dto_items,
@@ -636,6 +679,7 @@ async def analyze_image_folder(
     files: List[UploadFile] = File(...),
     folder_name: Optional[str] = Form(None),
     relative_paths: Optional[str] = Form(None),
+    source_url: Optional[str] = Form(None),
 ):
     if not files:
         raise IngestionValidationError(
@@ -690,6 +734,7 @@ async def analyze_image_folder(
             file_id=target_file_id,
             relative_path=rel_path,
             auto_update_metadata=True,
+            source_url=source_url or "",
         )
         if analysis is not None:
             analyses_raw.append(analysis)
@@ -703,6 +748,7 @@ async def analyze_image_folder(
 @app.post(f"{settings.api_prefix}/images/analyze-existing", response_model=FolderAnalysisResponseDTO)
 def analyze_existing_images(payload: ImageWordExportRequestDTO):
     analyses_raw = []
+    overrides_map = payload.template_overrides_by_file or {}
     for fid in payload.file_ids:
         item = ArchiveRepository.get_file(fid)
         if not item:
@@ -713,6 +759,8 @@ def analyze_existing_images(payload: ImageWordExportRequestDTO):
             file_id=fid,
             relative_path=item.title,
             auto_update_metadata=True,
+            source_url=payload.source_url or "",
+            template_overrides=overrides_map.get(fid),
         )
         if analysis is not None:
             analyses_raw.append(analysis)
@@ -729,6 +777,7 @@ def analyze_existing_images(payload: ImageWordExportRequestDTO):
 @app.post(f"{settings.api_prefix}/images/export-word")
 def export_images_analysis_word(payload: ImageWordExportRequestDTO):
     analyses_raw = []
+    overrides_map = payload.template_overrides_by_file or {}
     for fid in payload.file_ids:
         item = ArchiveRepository.get_file(fid)
         if not item:
@@ -739,6 +788,8 @@ def export_images_analysis_word(payload: ImageWordExportRequestDTO):
             file_id=fid,
             relative_path=item.title,
             auto_update_metadata=False,
+            source_url=payload.source_url or "",
+            template_overrides=overrides_map.get(fid),
         )
         if analysis is not None:
             analyses_raw.append(analysis)
@@ -790,4 +841,5 @@ def export_single_file_analysis_word(file_id: str):
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers=headers,
     )
+
 

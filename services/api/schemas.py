@@ -271,6 +271,26 @@ class SessionHandshakeDTO(BaseModel):
     allowed_origins: List[str]
 
 
+class CulturalSocialTemplateFieldsDTO(BaseModel):
+    full_name: str = ""
+    national_id: str = ""
+    phone_number: str = ""
+    guidance_date: str = ""
+    numeric_id: str = ""
+    account_handle: str = ""
+    description: str = ""
+    city_hashtag: str = "#کاشمر"
+    occupation: str = ""
+    violation: str = "ترویج ابتذال"
+    action_request: str = "درخواست مسدودی سیم کارت"
+    profile_url: str = ""
+    hashtags: List[str] = Field(
+        default_factory=lambda: ["#ابتذال", "#خراسان_رضوی", "#شهرستان_کاشمر"]
+    )
+    cultural_template_text: str = ""
+    social_template_text: str = ""
+
+
 class ImageAnalysisItemDTO(BaseModel):
     file_id: str
     title: str
@@ -294,17 +314,27 @@ class ImageAnalysisItemDTO(BaseModel):
     bbox_count: int = 0
     ocr_confidence: Optional[float] = None
     extracted_text: str = ""
+    account_id: str = ""
+    account_username: str = ""
+    account_label: str = "بدون نام کاربری / آیدی مشخص"
+    platform_source: str = "اسکرین‌شات / تصویر عمومی"
+    thematic_category: str = "اجتماعی"
     image_nature: str = "سند یا برگهٔ متنی اسکن‌شده"
-    detected_topic: str = "اداری و مکاتبات"
+    detected_topic: str = "اجتماعی"
     confidence_label: str = "بالا"
     tags: List[str] = Field(default_factory=list)
     key_findings: List[str] = Field(default_factory=list)
     analysis_summary: str = ""
+    template_applicable: bool = False
+    template_fields: Optional[CulturalSocialTemplateFieldsDTO] = None
+    formatted_template_text: str = ""
 
 
 class FolderAnalysisResponseDTO(BaseModel):
     folder_name: str
     total_images: int
+    account_breakdown: Dict[str, int] = Field(default_factory=dict)
+    account_category_tree: Dict[str, Dict[str, int]] = Field(default_factory=dict)
     topic_breakdown: Dict[str, int] = Field(default_factory=dict)
     nature_breakdown: Dict[str, int] = Field(default_factory=dict)
     items: List[ImageAnalysisItemDTO] = Field(default_factory=list)
@@ -313,4 +343,8 @@ class FolderAnalysisResponseDTO(BaseModel):
 class ImageWordExportRequestDTO(BaseModel):
     file_ids: List[str] = Field(..., min_length=1, max_length=200)
     folder_name: Optional[str] = Field(default="پوشهٔ تصاویر انتخابی", max_length=200)
+    source_url: Optional[str] = Field(default=None, max_length=500)
+    template_overrides_by_file: Optional[Dict[str, Dict[str, Any]]] = None
+
+
 
