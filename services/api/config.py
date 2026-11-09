@@ -31,6 +31,22 @@ def _parse_origins_env() -> List[str]:
     return default_origins
 
 
+def _resolve_default_ocr_model_dir() -> str:
+    env_dir = os.environ.get("SAHER_OCR_MODEL_DIR", "").strip()
+    if env_dir:
+        return env_dir
+    base = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    candidates = [
+        os.path.join(base, "data", "models", "tessdata"),
+        "/opt/saher-models/tessdata",
+        "/usr/share/tesseract-ocr/5/tessdata",
+    ]
+    for cand in candidates:
+        if os.path.isdir(cand) and any(name.endswith(".traineddata") for name in os.listdir(cand)):
+            return cand
+    return candidates[0]
+
+
 class Settings(BaseModel):
     app_name: str = "SAHER Offline Archive API"
     app_version: str = "0.3.0"
@@ -52,16 +68,7 @@ class Settings(BaseModel):
     ocr_engine: str = Field(
         default_factory=lambda: os.environ.get("SAHER_OCR_ENGINE", "tesseract")
     )
-    ocr_model_dir: str = Field(
-        default_factory=lambda: os.environ.get(
-            "SAHER_OCR_MODEL_DIR",
-            os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")), "data", "models", "tessdata")
-            if os.path.isdir(
-                os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")), "data", "models", "tessdata")
-            )
-            else "/usr/share/tesseract-ocr/5/tessdata",
-        )
-    )
+    ocr_model_dir: str = Field(default_factory=_resolve_default_ocr_model_dir)
     ocr_languages: str = Field(
         default_factory=lambda: os.environ.get("SAHER_OCR_LANGUAGES", "fas+eng")
     )

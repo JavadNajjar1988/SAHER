@@ -983,3 +983,69 @@ class ArchiveRepository:
             return 0
         res = LegacyMigrationManager.execute_approved_cleanup(confirm_approval=True)
         return res.removed_count
+
+    @classmethod
+    def analyze_file_nature_and_topic(
+        cls,
+        file_id: str,
+        relative_path: str = "",
+        auto_update_metadata: bool = False,
+    ):
+        """
+        Computes a comprehensive visual + textual nature & topic analysis for a stored archive file/image.
+        Optionally enriches the file's topic and tags in SQLite when `auto_update_metadata=True`.
+        """
+        from services.analysis.image_analyzer import analyze_image_nature_and_topic
+
+        file_item = cls.get_file(file_id)
+        if not file_item:
+            return None
+
+        storage_info = cls.get_file_storage_path(file_id)
+        storage_path = storage_info[0] if storage_info else ""
+        pages = cls.get_file_pages(file_id)
+
+        bboxes_combined = []
+        confs = []
+        for p in pages:
+            for b in p.bboxes:
+                bboxes_combined.append(b.model_dump() if hasattr(b, "model_dump") else dict(b))
+            if p.ocr_confidence is not None:
+                confs.append(float(p.ocr_confidence))
+
+        avg_conf = round(sum(confs) / len(confs), 1) if confs else None
+
+        result = analyze_image_nature_and_topic(
+            file_id=file_item.id,
+            title=file_item.title,
+            image_path=storage_path,
+            mime_type=file_item.mime_type,
+            file_size=file_item.file_size,
+            extracted_text=file_item.text or "",
+            bboxes=bboxes_combined,
+            ocr_confidence=avg_conf,
+            relative_path=relative_path or file_item.title,
+        )
+
+        if auto_update_metadata and not file_item.is_user_modified:
+            merged_tags = list(file_item.tags)
+            for t in result.tags:
+                if t not in merged_tags:
+                    merged_tags.append(t)
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE files SET topic = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (result.detected_topic, file_id),
+                )
+                cls.set_file_tags(conn, file_id, merged_tags[:8])
+                cls.update_fts(
+                    conn,
+                    file_id,
+                    file_item.title,
+                    file_item.text or "",
+                    result.detected_topic,
+                    merged_tags[:8],
+                )
+
+        return result
+

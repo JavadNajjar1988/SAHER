@@ -269,3 +269,48 @@ class SessionHandshakeDTO(BaseModel):
     session_auth_required: bool
     session_token: Optional[str] = None
     allowed_origins: List[str]
+
+
+class ImageAnalysisItemDTO(BaseModel):
+    file_id: str
+    title: str
+    relative_path: str = ""
+    mime_type: str = "image/png"
+    file_size: int = 0
+    width: int = 0
+    height: int = 0
+    aspect_ratio: float = 1.0
+    orientation: str = "افقی (Landscape)"
+    color_mode: str = "RGB"
+    dominant_color_hex: str = "#F5F3EE"
+    color_profile_label: str = "زمینهٔ روشن کاغذی"
+    mean_brightness: float = 240.0
+    contrast_std: float = 25.0
+    paper_bg_ratio: float = 0.8
+    edge_density: float = 0.05
+    word_count: int = 0
+    char_count: int = 0
+    line_count: int = 0
+    bbox_count: int = 0
+    ocr_confidence: Optional[float] = None
+    extracted_text: str = ""
+    image_nature: str = "سند یا برگهٔ متنی اسکن‌شده"
+    detected_topic: str = "اداری و مکاتبات"
+    confidence_label: str = "بالا"
+    tags: List[str] = Field(default_factory=list)
+    key_findings: List[str] = Field(default_factory=list)
+    analysis_summary: str = ""
+
+
+class FolderAnalysisResponseDTO(BaseModel):
+    folder_name: str
+    total_images: int
+    topic_breakdown: Dict[str, int] = Field(default_factory=dict)
+    nature_breakdown: Dict[str, int] = Field(default_factory=dict)
+    items: List[ImageAnalysisItemDTO] = Field(default_factory=list)
+
+
+class ImageWordExportRequestDTO(BaseModel):
+    file_ids: List[str] = Field(..., min_length=1, max_length=200)
+    folder_name: Optional[str] = Field(default="پوشهٔ تصاویر انتخابی", max_length=200)
+

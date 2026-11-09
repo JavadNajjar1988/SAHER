@@ -56,8 +56,25 @@ class TesseractOCREngine(OCREngineAdapter):
         raw = languages or self.languages or "fas+eng"
         return [code.strip() for code in raw.replace(",", "+").split("+") if code.strip()]
 
+    def _resolve_tesseract_bin(self) -> Optional[str]:
+        root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        bundled_bin = os.path.join(root_dir, "node_modules", ".saher_bin", "tesseract")
+        bundled_lib = os.path.join(root_dir, "node_modules", ".saher_bin", "lib")
+        if os.path.isfile(bundled_bin) and os.access(bundled_bin, os.X_OK):
+            if os.path.isdir(bundled_lib):
+                cur_ld = os.environ.get("LD_LIBRARY_PATH", "")
+                if bundled_lib not in cur_ld:
+                    os.environ["LD_LIBRARY_PATH"] = f"{bundled_lib}:{cur_ld}" if cur_ld else bundled_lib
+            try:
+                import pytesseract
+                pytesseract.pytesseract.tesseract_cmd = bundled_bin
+            except Exception:
+                pass
+            return bundled_bin
+        return shutil.which("tesseract")
+
     def _detect_tesseract_version(self) -> Tuple[bool, str]:
-        bin_path = shutil.which("tesseract")
+        bin_path = self._resolve_tesseract_bin()
         if not bin_path:
             return False, "not_installed"
         try:
@@ -67,6 +84,7 @@ class TesseractOCREngine(OCREngineAdapter):
                 text=True,
                 timeout=5,
                 check=False,
+                env=os.environ.copy(),
             )
             first_line = (proc.stdout or proc.stderr or "").splitlines()
             version_str = first_line[0].strip() if first_line else "tesseract 5.x"

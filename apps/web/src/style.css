@@ -1597,4 +1597,460 @@ footer {
   justify-content: flex-end;
 }
 
+/* ==========================================================================
+   Batch Image Folder Analysis (Nature & Topic) & Word (.docx) Export UI
+   ========================================================================== */
 
+.heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.secondary-header-btn {
+  background: #edf5f3;
+  color: #1e4d44;
+  border: 1px solid #bdd6d0;
+  padding: 9px 14px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.secondary-header-btn:hover {
+  background: #dfeeea;
+  border-color: #9ec2b9;
+}
+
+.word-export-btn {
+  background: #1e4d44 !important;
+  color: #fff !important;
+  border-color: #1e4d44 !important;
+  font-weight: 600;
+}
+
+.word-export-btn:hover {
+  background: #163a33 !important;
+}
+
+.batch-analysis-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-bottom: 32px;
+}
+
+.batch-upload-panel {
+  background: #ffffff;
+  border: 1px solid #e2e7e6;
+  border-radius: 14px;
+  padding: 22px 24px;
+  box-shadow: 0 2px 8px rgba(24, 49, 45, 0.03);
+}
+
+.batch-upload-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.batch-upload-header h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+  color: #1b3538;
+}
+
+.batch-upload-header p {
+  margin: 0;
+  font-size: 12.5px;
+  color: #5a7074;
+  max-width: 680px;
+  line-height: 1.7;
+}
+
+.batch-folder-title-input {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 250px;
+}
+
+.batch-folder-title-input label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #486064;
+}
+
+.batch-folder-title-input input {
+  padding: 8px 12px;
+  border: 1px solid #cfd9d8;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 12px;
+  color: #1f393d;
+  background: #fbfcfc;
+}
+
+.batch-actions-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.batch-drop-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: right;
+  gap: 6px;
+  padding: 18px;
+  border-radius: 12px;
+  border: 1.5px dashed #b9ccc8;
+  background: #f8fbfa;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.batch-drop-card:hover:not(:disabled) {
+  border-color: #245c53;
+  background: #eff7f5;
+  transform: translateY(-1px);
+}
+
+.batch-drop-card:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.batch-drop-card.primary-card,
+.batch-drop-card.primary-drop {
+  border-style: solid;
+  border-color: #245c53;
+  background: linear-gradient(135deg, #f1f8f6 0%, #e4f1ee 100%);
+}
+
+.batch-card-icon {
+  font-size: 22px;
+  line-height: 1;
+  margin-bottom: 4px;
+  color: #245c53;
+}
+
+.batch-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.batch-drop-card strong {
+  font-size: 13.5px;
+  color: #193833;
+  display: block;
+}
+
+.batch-drop-card small {
+  font-size: 11.5px;
+  color: #5b7275;
+  line-height: 1.65;
+  display: block;
+}
+
+.batch-drop-card input[type="file"] {
+  display: none;
+}
+
+.batch-status-banner {
+  margin-top: 14px;
+  padding: 11px 16px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #eef6f4;
+  border: 1px solid #c3ded8;
+  color: #1e5248;
+}
+
+.batch-status-banner.info {
+  background: #eef6f4;
+  border: 1px solid #c3ded8;
+  color: #1e5248;
+}
+
+.batch-status-banner.error {
+  background: #fdecea;
+  border: 1px solid #f5c2c0;
+  color: #8a1c14;
+}
+
+.batch-results-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.batch-results-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  background: #ffffff;
+  border: 1px solid #e2e7e6;
+  border-radius: 14px;
+  padding: 18px 22px;
+}
+
+.batch-results-meta h3,
+.batch-results-header h3 {
+  margin: 0 0 6px;
+  font-size: 15.5px;
+  color: #1b3538;
+}
+
+.batch-breakdown-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  color: #4f666a;
+  margin: 4px 0 0;
+}
+
+.batch-export-btn,
+.export-word-cta {
+  padding: 11px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 10px;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.batch-filter-bar {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.batch-filter-bar button {
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid #cfd9d8;
+  background: #ffffff;
+  color: #355054;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.batch-filter-bar button.active {
+  background: #245c53;
+  border-color: #245c53;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.batch-items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.batch-item-card {
+  display: grid;
+  grid-template-columns: 185px minmax(0, 1fr);
+  gap: 20px;
+  background: #ffffff;
+  border: 1px solid #e2e7e6;
+  border-radius: 14px;
+  padding: 18px;
+  align-items: start;
+}
+
+.batch-item-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  background: #f5f7f7;
+  border: 1px solid #e4e9e8;
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.batch-item-preview img {
+  width: 100%;
+  max-height: 145px;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.batch-item-index {
+  font-size: 11px;
+  font-weight: 600;
+  color: #4d6569;
+}
+
+.batch-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.batch-item-toprow {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.batch-item-title {
+  margin: 0;
+  font-size: 15px;
+  color: #193539;
+}
+
+.batch-item-relpath {
+  display: block;
+  font-size: 11px;
+  color: #74898c;
+  margin-top: 2px;
+  direction: ltr;
+  text-align: right;
+}
+
+.batch-item-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.topic-pill {
+  background: #e6f2ef;
+  color: #1d5248;
+  border: 1px solid #c0ddd6;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.nature-pill {
+  background: #f5f1e6;
+  color: #5c4b23;
+  border: 1px solid #e2d8be;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.batch-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 11.5px;
+  color: #566d71;
+  background: #f8fafa;
+  padding: 7px 11px;
+  border-radius: 8px;
+}
+
+.color-swatch-inline {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  vertical-align: middle;
+  margin-left: 5px;
+}
+
+.batch-item-summary {
+  font-size: 12.5px;
+  line-height: 1.85;
+  color: #263e42;
+}
+
+.batch-item-summary p {
+  margin: 4px 0 0;
+}
+
+.batch-findings-list {
+  margin: 4px 0 0;
+  padding-right: 18px;
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: #395256;
+  line-height: 1.7;
+}
+
+.batch-item-ocr-box {
+  background: #f9f8f4;
+  border: 1px solid #e5e0d5;
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 12px;
+  color: #2f3e3b;
+}
+
+.batch-item-ocr-box p {
+  margin: 4px 0 0;
+  line-height: 1.8;
+  white-space: pre-wrap;
+}
+
+.batch-item-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.batch-item-actions button,
+.batch-item-actions .ghost-link-btn {
+  padding: 6px 12px;
+  font-size: 11.5px;
+  border-radius: 8px;
+  border: 1px solid #cfd9d8;
+  background: #fff;
+  color: #1f393d;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.batch-item-actions button:hover,
+.batch-item-actions .ghost-link-btn:hover {
+  border-color: #245c53;
+  color: #245c53;
+  background: #f2f8f6;
+}
+
+@media (max-width: 900px) {
+  .batch-actions-grid {
+    grid-template-columns: 1fr;
+  }
+  .batch-item-card {
+    grid-template-columns: 1fr;
+  }
+}

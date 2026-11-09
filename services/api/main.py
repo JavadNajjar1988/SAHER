@@ -1,9 +1,12 @@
+import json
 import os
-from typing import List, Optional, AsyncIterator
+from dataclasses import asdict
+from typing import Dict, List, Optional, AsyncIterator
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, Response
+from services.analysis.word_exporter import generate_image_analysis_docx
 from services.api.config import settings
 from services.api.database import init_db, get_db
 from services.api.migrations import LegacyMigrationManager
@@ -34,6 +37,9 @@ from services.api.schemas import (
     LegacyMigrationResultDTO,
     MigrationAuditItemDTO,
     SessionHandshakeDTO,
+    ImageAnalysisItemDTO,
+    FolderAnalysisResponseDTO,
+    ImageWordExportRequestDTO,
 )
 from services.ingestion.extractor import render_page_preview_png
 from services.ocr import get_ocr_engine
@@ -594,3 +600,194 @@ def restore_legacy_migration_backup(backup_id: str):
 @app.get(f"{settings.api_prefix}/migrations/audits", response_model=List[MigrationAuditItemDTO])
 def list_migration_audits():
     return LegacyMigrationManager.list_audits()
+
+
+# ============================================================================
+# Batch Folder Image Analysis (Topic & Nature) & Word (.docx) Report Export
+# ============================================================================
+
+
+def _build_folder_analysis_response(
+    analyses_raw: List,
+    folder_name: str,
+) -> FolderAnalysisResponseDTO:
+    topic_breakdown: Dict[str, int] = {}
+    nature_breakdown: Dict[str, int] = {}
+    dto_items: List[ImageAnalysisItemDTO] = []
+
+    for item in analyses_raw:
+        topic_breakdown[item.detected_topic] = topic_breakdown.get(item.detected_topic, 0) + 1
+        nature_breakdown[item.image_nature] = nature_breakdown.get(item.image_nature, 0) + 1
+        d = asdict(item)
+        d.pop("image_path", None)
+        dto_items.append(ImageAnalysisItemDTO(**d))
+
+    return FolderAnalysisResponseDTO(
+        folder_name=folder_name or "پوشهٔ تصاویر انتخابی",
+        total_images=len(dto_items),
+        topic_breakdown=topic_breakdown,
+        nature_breakdown=nature_breakdown,
+        items=dto_items,
+    )
+
+
+@app.post(f"{settings.api_prefix}/images/analyze-folder", response_model=FolderAnalysisResponseDTO)
+async def analyze_image_folder(
+    files: List[UploadFile] = File(...),
+    folder_name: Optional[str] = Form(None),
+    relative_paths: Optional[str] = Form(None),
+):
+    if not files:
+        raise IngestionValidationError(
+            "هیچ فایلی برای تحلیل پوشهٔ تصاویر ارسال نشده است.",
+            code="EMPTY_FOLDER_UPLOAD",
+            status_code=400,
+        )
+
+    rel_paths_list: List[str] = []
+    if relative_paths:
+        try:
+            parsed = json.loads(relative_paths)
+            if isinstance(parsed, list):
+                rel_paths_list = [str(x) for x in parsed]
+        except Exception:
+            rel_paths_list = []
+
+    analyses_raw = []
+    inferred_folder = (folder_name or "").strip()
+
+    for idx, up_file in enumerate(files):
+        raw_filename = up_file.filename or f"image_{idx + 1}.png"
+        rel_path = rel_paths_list[idx] if idx < len(rel_paths_list) else raw_filename
+        if not inferred_folder and "/" in rel_path:
+            inferred_folder = rel_path.split("/")[0].strip()
+
+        async def _iter_chunks(u: UploadFile) -> AsyncIterator[bytes]:
+            while True:
+                chunk = await u.read(settings.upload_chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+
+        try:
+            try:
+                saved_item = await ArchiveRepository.save_uploaded_stream(
+                    filename=os.path.basename(raw_filename),
+                    chunk_iterator=_iter_chunks(up_file),
+                    custom_topic=None,
+                    async_mode=False,
+                )
+                target_file_id = saved_item.id
+            except DuplicateFileError as dup_err:
+                target_file_id = dup_err.existing_id
+                existing_item = ArchiveRepository.get_file(target_file_id)
+                if existing_item and existing_item.latest_job_id and existing_item.job_state in ("QUEUED", "RUNNING"):
+                    default_worker.process_one(specific_job_id=existing_item.latest_job_id)
+        finally:
+            await up_file.close()
+
+        analysis = ArchiveRepository.analyze_file_nature_and_topic(
+            file_id=target_file_id,
+            relative_path=rel_path,
+            auto_update_metadata=True,
+        )
+        if analysis is not None:
+            analyses_raw.append(analysis)
+
+    return _build_folder_analysis_response(
+        analyses_raw=analyses_raw,
+        folder_name=inferred_folder or "پوشهٔ تصاویر انتخابی",
+    )
+
+
+@app.post(f"{settings.api_prefix}/images/analyze-existing", response_model=FolderAnalysisResponseDTO)
+def analyze_existing_images(payload: ImageWordExportRequestDTO):
+    analyses_raw = []
+    for fid in payload.file_ids:
+        item = ArchiveRepository.get_file(fid)
+        if not item:
+            continue
+        if item.latest_job_id and item.job_state in ("QUEUED", "RUNNING"):
+            default_worker.process_one(specific_job_id=item.latest_job_id)
+        analysis = ArchiveRepository.analyze_file_nature_and_topic(
+            file_id=fid,
+            relative_path=item.title,
+            auto_update_metadata=True,
+        )
+        if analysis is not None:
+            analyses_raw.append(analysis)
+
+    if not analyses_raw:
+        raise HTTPException(status_code=404, detail="هیچ تصویری با شناسه‌های ارسالی در آرشیو یافت نشد.")
+
+    return _build_folder_analysis_response(
+        analyses_raw=analyses_raw,
+        folder_name=payload.folder_name or "تصاویر منتخب کتابخانه",
+    )
+
+
+@app.post(f"{settings.api_prefix}/images/export-word")
+def export_images_analysis_word(payload: ImageWordExportRequestDTO):
+    analyses_raw = []
+    for fid in payload.file_ids:
+        item = ArchiveRepository.get_file(fid)
+        if not item:
+            continue
+        if item.latest_job_id and item.job_state in ("QUEUED", "RUNNING"):
+            default_worker.process_one(specific_job_id=item.latest_job_id)
+        analysis = ArchiveRepository.analyze_file_nature_and_topic(
+            file_id=fid,
+            relative_path=item.title,
+            auto_update_metadata=False,
+        )
+        if analysis is not None:
+            analyses_raw.append(analysis)
+
+    if not analyses_raw:
+        raise HTTPException(status_code=404, detail="هیچ فایل معتبری برای تولید گزارش Word یافت نشد.")
+
+    docx_bytes = generate_image_analysis_docx(
+        analyses=analyses_raw,
+        folder_name=payload.folder_name or "پوشهٔ تصاویر انتخابی",
+    )
+    headers = {
+        "Content-Disposition": 'attachment; filename="saher-images-analysis-report.docx"',
+        "X-Content-Type-Options": "nosniff",
+    }
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers=headers,
+    )
+
+
+@app.get(f"{settings.api_prefix}/files/{{file_id}}/export-word")
+def export_single_file_analysis_word(file_id: str):
+    item = ArchiveRepository.get_file(file_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="فایل مورد نظر در آرشیو یافت نشد.")
+    if item.latest_job_id and item.job_state in ("QUEUED", "RUNNING"):
+        default_worker.process_one(specific_job_id=item.latest_job_id)
+
+    analysis = ArchiveRepository.analyze_file_nature_and_topic(
+        file_id=file_id,
+        relative_path=item.title,
+        auto_update_metadata=False,
+    )
+    if not analysis:
+        raise HTTPException(status_code=404, detail="امکان تحلیل این فایل وجود ندارد.")
+
+    docx_bytes = generate_image_analysis_docx(
+        analyses=[analysis],
+        folder_name=item.title,
+    )
+    headers = {
+        "Content-Disposition": f'attachment; filename="saher-analysis-{file_id[:8]}.docx"',
+        "X-Content-Type-Options": "nosniff",
+    }
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers=headers,
+    )
+

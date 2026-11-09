@@ -292,3 +292,86 @@ test("ArchiveApiClient supports Milestone 3 page-level OCR inspection, manual pa
   }
 });
 
+test("ArchiveApiClient analyzes image folders and exports Word (.docx) reports", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method || "GET";
+
+      if (url === "/api/v1/images/analyze-folder" && method === "POST") {
+        return new Response(
+          JSON.stringify({
+            folder_name: "پوشه فاکتورها",
+            total_images: 1,
+            topic_breakdown: { "مالی و حسابداری": 1 },
+            nature_breakdown: { "فاکتور، رسید یا صورت‌حساب مالی": 1 },
+            items: [
+              {
+                file_id: "img-101",
+                title: "invoice_scan.png",
+                relative_path: "invoices/invoice_scan.png",
+                mime_type: "image/png",
+                file_size: 24500,
+                width: 1000,
+                height: 700,
+                orientation: "افقی (Landscape)",
+                aspect_ratio: 1.43,
+                color_profile_label: "روشن با پس‌زمینهٔ سفید (سند اسکن‌شده یا برگهٔ اداری)",
+                dominant_color_hex: "#f8f9fa",
+                mean_brightness: 240.2,
+                contrast_std: 34.1,
+                image_nature: "فاکتور، رسید یا صورت‌حساب مالی",
+                detected_topic: "مالی و حسابداری",
+                suggested_tags: ["مالی و حسابداری", "فاکتور و صورت‌حساب", "دارای متن فارسی/انگلیسی"],
+                has_text: true,
+                ocr_word_count: 18,
+                ocr_char_count: 95,
+                ocr_confidence: 91.5,
+                ocr_excerpt: "فاکتور رسمی فروش کالا و خدمات",
+                analysis_summary: "این فایل با عنوان «invoice_scan.png» از نظر ماهیت بصری و ساختاری یک «فاکتور، رسید یا صورت‌حساب مالی» تشخیص داده شد.",
+                key_findings: ["ماهیت تشخیص‌داده‌شده: فاکتور، رسید یا صورت‌حساب مالی"],
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      if (url === "/api/v1/images/export-word" && method === "POST") {
+        return new Response(new Uint8Array([0x50, 0x4b, 0x03, 0x04]), {
+          status: 200,
+          headers: {
+            "Content-Type":
+              "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          },
+        });
+      }
+
+      throw new Error(`Unexpected URL: ${url}`);
+    };
+
+    const dummyFile = new File([new Uint8Array([137, 80, 78, 71])], "invoice_scan.png", {
+      type: "image/png",
+    });
+    const folderRes = await ArchiveApiClient.analyzeImageFolder(
+      [dummyFile],
+      "پوشه فاکتورها",
+      ["invoices/invoice_scan.png"],
+    );
+    assert.equal(folderRes.total_images, 1);
+    assert.equal(folderRes.items[0].detected_topic, "مالی و حسابداری");
+    assert.equal(folderRes.items[0].image_nature, "فاکتور، رسید یا صورت‌حساب مالی");
+
+    const wordBlob = await ArchiveApiClient.downloadImagesWordReport(
+      ["img-101"],
+      "پوشه فاکتورها",
+    );
+    assert.ok(wordBlob.size > 0);
+
+    const singleWordUrl = ArchiveApiClient.getSingleFileWordUrl("img-101");
+    assert.equal(singleWordUrl, "/api/v1/files/img-101/export-word");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

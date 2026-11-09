@@ -248,3 +248,43 @@ export interface LegacyMigrationResult {
   audit_id: string;
   message: string;
 }
+
+export interface ImageAnalysisItem {
+  file_id: string;
+  title: string;
+  relative_path: string;
+  mime_type: string;
+  file_size: number;
+  width: number;
+  height: number;
+  aspect_ratio: number;
+  orientation: string;
+  color_mode: string;
+  dominant_color_hex: string;
+  color_profile_label: string;
+  mean_brightness: number;
+  contrast_std: number;
+  paper_bg_ratio: number;
+  edge_density: number;
+  word_count: number;
+  char_count: number;
+  line_count: number;
+  bbox_count: number;
+  ocr_confidence?: number | null;
+  extracted_text: string;
+  image_nature: string;
+  detected_topic: string;
+  confidence_label: string;
+  tags: string[];
+  key_findings: string[];
+  analysis_summary: string;
+}
+
+export interface FolderAnalysisResponse {
+  folder_name: string;
+  total_images: number;
+  topic_breakdown: Record<string, number>;
+  nature_breakdown: Record<string, number>;
+  items: ImageAnalysisItem[];
+}
+

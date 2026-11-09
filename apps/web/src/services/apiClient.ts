@@ -472,4 +472,94 @@ export class ArchiveApiClient {
       },
     );
   }
+
+  // Batch Folder Image Analysis (Topic & Nature) & Word (.docx) Report Export
+  static async analyzeImageFolder(
+    files: File[],
+    folderName?: string,
+  ): Promise<import("../types/archive").FolderAnalysisResponse> {
+    const formData = new FormData();
+    const relPaths: string[] = [];
+    for (const f of files) {
+      formData.append("files", f);
+      const webkitRel = (f as any).webkitRelativePath;
+      relPaths.push(webkitRel && typeof webkitRel === "string" ? webkitRel : f.name);
+    }
+    if (folderName) {
+      formData.append("folder_name", folderName);
+    }
+    formData.append("relative_paths", JSON.stringify(relPaths));
+
+    return this.requestJson<import("../types/archive").FolderAnalysisResponse>(
+      `/api/v1/images/analyze-folder`,
+      {
+        method: "POST",
+        body: formData,
+      },
+      120000,
+    );
+  }
+
+  static async analyzeExistingImages(
+    fileIds: string[],
+    folderName?: string,
+  ): Promise<import("../types/archive").FolderAnalysisResponse> {
+    return this.requestJson<import("../types/archive").FolderAnalysisResponse>(
+      `/api/v1/images/analyze-existing`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          file_ids: fileIds,
+          folder_name: folderName || "تصاویر منتخب کتابخانه",
+        }),
+      },
+      90000,
+    );
+  }
+
+  static async downloadImagesWordReport(
+    fileIds: string[],
+    folderName?: string,
+  ): Promise<Blob> {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "X-Saher-Client": "web-ui/0.3.0",
+    };
+    if (this.sessionToken) {
+      headers["X-Saher-Session-Token"] = this.sessionToken;
+    }
+
+    const response = await fetch(this.buildUrl(`/api/v1/images/export-word`), {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        file_ids: fileIds,
+        folder_name: folderName || "پوشهٔ تصاویر انتخابی",
+      }),
+    });
+
+    if (!response.ok) {
+      let detail = "خطا در تولید گزارش Word (.docx)";
+      try {
+        const errJson = await response.json();
+        if (errJson?.detail) detail = String(errJson.detail);
+      } catch {
+        // Ignore JSON parse error
+      }
+      throw new ApiClientError({
+        message: detail,
+        status: response.status,
+        code: "WORD_EXPORT_FAILED",
+        isNetworkError: false,
+      });
+    }
+
+    return await response.blob();
+  }
+
+  static getSingleFileWordUrl(fileId: string): string {
+    return this.buildUrl(`/api/v1/files/${encodeURIComponent(fileId)}/export-word`);
+  }
 }
+

@@ -24,6 +24,7 @@ import { Preview } from "./components/Preview";
 import { FileDetailModal } from "./components/FileDetailModal";
 import { ImportDialog } from "./components/ImportDialog";
 import { ProcessingQueueView } from "./components/ProcessingQueueView";
+import { BatchImageAnalysisView } from "./components/BatchImageAnalysisView";
 
 const digits = (value: number) => value.toLocaleString("fa-IR");
 
@@ -482,24 +483,47 @@ function App() {
               <p>
                 {page === "صف پردازش" || page === "منابع"
                   ? "پایش زندهٔ کارهای پردازشی پایدار، مراحل استخراج متن، وضعیت کارگرهای پس‌زمینه و مدیریت منابع"
-                  : "اینجا جایی برای نگه‌داشتن، پیدا کردن و دوباره کشف کردن است."}
+                  : page === "تحلیل پوشهٔ عکس‌ها"
+                    ? "تحلیل خودکار موضوع و ماهیت هر تصویر در پوشه به همراه استخراج متن آفلاین (OCR) و تولید گزارش Word (.docx)"
+                    : "اینجا جایی برای نگه‌داشتن، پیدا کردن و دوباره کشف کردن است."}
               </p>
             </div>
-            <button
-              className="primary"
-              disabled={connectionMode !== "connected"}
-              title={
-                connectionMode !== "connected"
-                  ? "واردسازی فایل فقط در حالت متصل به سرویس محلی FastAPI امکان‌پذیر است"
-                  : "افزودن فایل جدید به آرشیو محلی"
-              }
-              onClick={() => setAdding(true)}
-            >
-              <span>＋</span> افزودن فایل
-            </button>
+            <div className="heading-actions">
+              {page !== "تحلیل پوشهٔ عکس‌ها" && (
+                <button
+                  type="button"
+                  className="secondary-header-btn"
+                  data-testid="open-folder-analyzer-btn"
+                  disabled={connectionMode !== "connected"}
+                  onClick={() => setPage("تحلیل پوشهٔ عکس‌ها")}
+                >
+                  <span>▤</span> تحلیل پوشهٔ عکس‌ها (Word)
+                </button>
+              )}
+              <button
+                className="primary"
+                disabled={connectionMode !== "connected"}
+                title={
+                  connectionMode !== "connected"
+                    ? "واردسازی فایل فقط در حالت متصل به سرویس محلی FastAPI امکان‌پذیر است"
+                    : "افزودن فایل جدید به آرشیو محلی"
+                }
+                onClick={() => setAdding(true)}
+              >
+                <span>＋</span> افزودن فایل
+              </button>
+            </div>
           </section>
 
-          {page === "صف پردازش" || page === "منابع" ? (
+          {page === "تحلیل پوشهٔ عکس‌ها" ? (
+            <BatchImageAnalysisView
+              connectionMode={connectionMode}
+              archiveFiles={items}
+              onRefreshArchive={loadFromBackend}
+              onOpenFileById={handleOpenFileById}
+              digits={digits}
+            />
+          ) : page === "صف پردازش" || page === "منابع" ? (
             <ProcessingQueueView
               jobs={jobs}
               jobStats={jobStats}

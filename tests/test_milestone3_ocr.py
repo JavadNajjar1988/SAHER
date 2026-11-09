@@ -468,3 +468,119 @@ def test_m3_standalone_worker_health_reporting():
         assert h1["active_workers_count"] >= 1
         assert h1["ocr_ready"] is True
         assert h1["ocr_engine"] == "tesseract"
+
+
+def test_m3_image_folder_analysis_and_word_report_export():
+    """Verify:
+    1. Uploading a folder of multiple images (POST /api/v1/images/analyze-folder) analyzes each image
+       individually for its visual/structural nature (image_nature) and content topic (detected_topic).
+    2. Exporting the analyzed images to Word (POST /api/v1/images/export-word) and single-file Word
+       (GET /api/v1/files/{id}/export-word) produces a valid .docx document containing a separate
+       analytical section and embedded thumbnail for each image.
+    """
+    import json
+    import docx
+
+    # Image 1: Scanned Persian financial invoice
+    pil_invoice = _render_persian_page_image([
+        "فاکتور رسمی فروش و صورتحساب مالی",
+        "مبلغ کل قابل پرداخت و مالیات ارزش افزوده",
+    ])
+    buf_inv = io.BytesIO()
+    pil_invoice.save(buf_inv, format="PNG")
+    img_invoice = buf_inv.getvalue()
+
+    # Image 2: Scanned Persian legal contract
+    pil_contract = _render_persian_page_image([
+        "قرارداد همکاری و تفاهم‌نامه حقوقی",
+        "ماده اول تعهدات طرفین و شرایط فسخ قرارداد",
+    ])
+    buf_con = io.BytesIO()
+    pil_contract.save(buf_con, format="PNG")
+    img_contract = buf_con.getvalue()
+
+    # Image 3: Colorful visual landscape / graphic illustration (no text, rich colors)
+    pil_graphic = Image.new("RGB", (900, 500), (35, 125, 190))
+    draw = ImageDraw.Draw(pil_graphic)
+    draw.rectangle([40, 40, 860, 460], fill=(42, 165, 130), outline=(245, 200, 70), width=6)
+    draw.ellipse([300, 120, 600, 380], fill=(230, 110, 65))
+    buf_graphic = io.BytesIO()
+    pil_graphic.save(buf_graphic, format="PNG")
+    img_graphic = buf_graphic.getvalue()
+
+    with TestClient(app) as client:
+        rel_paths = json.dumps([
+            "archive_2026/finance/invoice_01.png",
+            "archive_2026/legal/contract_02.png",
+            "archive_2026/media/landscape_photo.png",
+        ])
+        resp = client.post(
+            "/api/v1/images/analyze-folder",
+            files=[
+                ("files", ("invoice_01.png", img_invoice, "image/png")),
+                ("files", ("contract_02.png", img_contract, "image/png")),
+                ("files", ("landscape_photo.png", img_graphic, "image/png")),
+            ],
+            data={
+                "folder_name": "پوشه اسناد و تصاویر آزمایشی",
+                "relative_paths": rel_paths,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["folder_name"] == "پوشه اسناد و تصاویر آزمایشی"
+        assert data["total_images"] == 3
+        items = data["items"]
+        assert len(items) == 3
+
+        # Image 1 should be classified as Financial topic & invoice nature
+        assert items[0]["detected_topic"] == "مالی و حسابداری"
+        assert "فاکتور" in items[0]["image_nature"] or "مالی" in items[0]["image_nature"]
+        assert items[0]["relative_path"] == "archive_2026/finance/invoice_01.png"
+
+        # Image 2 should be classified as Legal/Contracts topic & official/contract scan nature
+        assert items[1]["detected_topic"] == "حقوقی و قراردادها"
+        assert "قرارداد" in items[1]["image_nature"] or "رسمی" in items[1]["image_nature"]
+
+        # Image 3 has no text and rich saturation -> Photography/General images or Graphic
+        assert items[2]["detected_topic"] in ("عکاسی و تصاویر عمومی", "طراحی و گرافیک")
+        assert len(items[2]["key_findings"]) >= 3
+
+        # Now export all 3 analyzed images to a single Word (.docx) file
+        file_ids = [it["file_id"] for it in items]
+        word_resp = client.post(
+            "/api/v1/images/export-word",
+            json={
+                "file_ids": file_ids,
+                "folder_name": "پوشه اسناد و تصاویر آزمایشی",
+            },
+        )
+        assert word_resp.status_code == 200
+        assert (
+            word_resp.headers["content-type"]
+            == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+        assert len(word_resp.content) > 5000
+
+        # Parse the generated .docx with python-docx and verify per-image sections & embedded pictures
+        doc = docx.Document(io.BytesIO(word_resp.content))
+        all_paragraphs_text = "\n".join(p.text for p in doc.paragraphs)
+        assert "پوشه اسناد و تصاویر آزمایشی" in all_paragraphs_text
+        assert "تصویر شمارهٔ 1: invoice_01" in all_paragraphs_text
+        assert "تصویر شمارهٔ 2: contract_02" in all_paragraphs_text
+        assert "تصویر شمارهٔ 3: landscape_photo" in all_paragraphs_text
+        assert "مالی و حسابداری" in all_paragraphs_text
+        assert "حقوقی و قراردادها" in all_paragraphs_text
+
+        # Verify all 3 images are embedded as inline shapes in the Word document
+        assert len(doc.inline_shapes) == 3
+        # Verify summary table + 3 per-image specification tables = 4 tables
+        assert len(doc.tables) == 4
+
+        # Verify single-file Word export endpoint as well
+        single_word = client.get(f"/api/v1/files/{file_ids[0]}/export-word")
+        assert single_word.status_code == 200
+        single_doc = docx.Document(io.BytesIO(single_word.content))
+        assert len(single_doc.inline_shapes) == 1
+
+

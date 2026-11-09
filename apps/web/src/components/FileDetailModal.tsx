@@ -452,13 +452,27 @@ export function FileDetailModal({
           disabled={saving}
           onChange={(e) => handleTopicChange(e.target.value)}
         >
-          {["طراحی", "معماری", "آموزش", "فناوری", "زندگی", "کار", "پژوهش"].map(
-            (t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ),
-          )}
+          {[
+            "مالی و حسابداری",
+            "حقوقی و قراردادها",
+            "فناوری و نرم‌افزار",
+            "معماری و مهندسی",
+            "آموزش و پژوهش",
+            "اداری و مکاتبات",
+            "طراحی و گرافیک",
+            "عکاسی و تصاویر عمومی",
+            "طراحی",
+            "معماری",
+            "آموزش",
+            "فناوری",
+            "زندگی",
+            "کار",
+            "پژوهش",
+          ].map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
         </select>
 
         <h3>برچسب‌ها</h3>
@@ -561,6 +575,35 @@ export function FileDetailModal({
           >
             {reanalyzing ? "در حال ثبت در صف…" : "↻ پردازش دوباره"}
           </button>
+          {!isDemoMode && (
+            <button
+              type="button"
+              data-testid="export-single-word-btn"
+              title="دریافت گزارش تحلیل ماهیت و موضوع این فایل در قالب Word (.docx)"
+              onClick={async () => {
+                setErrorMsg("");
+                try {
+                  const blob = await ArchiveApiClient.downloadImagesWordReport(
+                    [selected.id],
+                    selected.title,
+                  );
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = `تحلیل-${selected.title.replace(/\.[^.]+$/, "")}.docx`;
+                  document.body.appendChild(a);
+                  a.click();
+                  a.remove();
+                  URL.revokeObjectURL(url);
+                  setNotice("گزارش تحلیل Word (.docx) با موفقیت آماده و دانلود شد.");
+                } catch (err: any) {
+                  setErrorMsg(err?.message || "خطا در تولید فایل Word (.docx).");
+                }
+              }}
+            >
+              ⬇ خروجی Word (.docx)
+            </button>
+          )}
         </div>
         {notice && (
           <p role="status" className="modal-notice">

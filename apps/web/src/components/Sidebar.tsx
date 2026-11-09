@@ -14,6 +14,7 @@ interface SidebarProps {
 
 const nav = [
   "کتابخانه",
+  "تحلیل پوشهٔ عکس‌ها",
   "جست‌وجو",
   "دسته‌بندی‌ها",
   "صف پردازش",
@@ -91,7 +92,7 @@ export function Sidebar({
             }}
           >
             <span className="navicon">
-              {["▦", "⌕", "◇", "≋", "☑", "▱"][index]}
+              {["▦", "▤", "⌕", "◇", "≋", "☑", "▱"][index]}
             </span>
             <span>{name}</span>
             {name === "بازبینی" && <b>{digits(attentionCount)}</b>}

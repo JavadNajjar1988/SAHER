@@ -10,8 +10,9 @@
     "dev:api": "node scripts/dev_runner.mjs api",
     "dev:worker": "node scripts/dev_runner.mjs worker",
     "dev:web": "npm run dev --workspace=apps/web",
-    "build": "npm run build --workspace=apps/web",
-    "lint": "npm run build --workspace=apps/web",
+    "build": "node scripts/dev_runner.mjs build",
+    "lint": "node scripts/dev_runner.mjs build",
+    "start": "node scripts/dev_runner.mjs dev",
     "test:api": "node scripts/dev_runner.mjs pytest",
     "test:web": "npx --yes tsx --test apps/web/src/services/apiClient.test.ts",
     "preview": "npm run preview --workspace=apps/web"
