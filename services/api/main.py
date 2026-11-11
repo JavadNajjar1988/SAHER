@@ -77,7 +77,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-from services.api.document_card import DocumentCard, get_card, save_card
+from services.api.document_card import DocumentCard, get_card, save_card, list_collections
+
+
+@app.get(f"{settings.api_prefix}/collections")
+def read_archive_collections(limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0)):
+    return list_collections(limit, offset)
 
 
 @app.get(f"{settings.api_prefix}/files/{{file_id}}/card")

@@ -11,6 +11,24 @@ import {
   LegacyMigrationResult,
 } from "../types/archive";
 
+export interface DocumentEvidence {
+  id: string;
+  quote: string;
+  page_number: number;
+  source_reference: string;
+  review_status: "pending" | "confirmed" | "rejected";
+  reviewer_note: string;
+  quote_matches_page?: boolean;
+}
+
+export interface ArchiveCollections {
+  total_documents: number;
+  total_collections: number;
+  items: { folder_path: string; document_count: number; source_count: number }[];
+  limit: number;
+  offset: number;
+}
+
 export interface DocumentCardData {
   folder_path: string;
   subject: string;
@@ -18,6 +36,7 @@ export interface DocumentCardData {
   location_label: string;
   source_reference: string;
   notes: string;
+  evidence?: DocumentEvidence[];
   detected_media_kind: string;
   detection_evidence: string;
   width?: number | null;
@@ -309,6 +328,10 @@ export class ArchiveApiClient {
 
   static async getDocumentCard(fileId: string): Promise<DocumentCardData> {
     return this.requestJson(`/api/v1/files/${encodeURIComponent(fileId)}/card`);
+  }
+
+  static async getCollections(offset = 0): Promise<ArchiveCollections> {
+    return this.requestJson(`/api/v1/collections?limit=100&offset=${offset}`);
   }
 
   static async saveDocumentCard(fileId: string, card: DocumentCardData): Promise<DocumentCardData> {

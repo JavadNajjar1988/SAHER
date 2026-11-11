@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { FileItem, FileUpdatePayload, PageItem } from "../types/archive";
 import { ArchiveApiClient } from "../services/apiClient";
 import { Preview } from "./Preview";
-import { DocumentCard } from "./DocumentCard";
+import { DocumentReport } from "./DocumentReport";
 
 interface FileDetailModalProps {
   selected: FileItem;
@@ -239,7 +239,7 @@ export function FileDetailModal({
           </button>
         </div>
 
-        {!isDemoMode && <DocumentCard key={selected.id} fileId={selected.id} />}
+        {!isDemoMode && <DocumentReport key={selected.id} file={selected} pages={pages} />}
         <div className={`preview large ${selected.color}`}>
           <Preview item={selected} />
         </div>

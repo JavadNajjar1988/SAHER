@@ -56,6 +56,31 @@ def generate_document_docx(item, pages, card):
     if card["notes"]:
         paragraph("یادداشت ثبت‌شده توسط کاربر", True)
         paragraph(card["notes"])
+    paragraph("شواهد مستند", True, 14)
+    evidence = card.get("evidence", [])
+    if not evidence:
+        paragraph("شاهدی برای این سند ثبت نشده است.")
+    review_labels = {"pending": "نیازمند بازبینی", "confirmed": "تأییدشده توسط بازبین", "rejected": "ردشده توسط بازبین"}
+    sources = {}
+    if card["source_reference"].strip():
+        sources[card["source_reference"].strip()] = 0
+    for index, entry in enumerate(evidence, 1):
+        paragraph(f"شاهد {_fa_digits(index)} · صفحهٔ {_fa_digits(entry['page_number'])}", True)
+        paragraph(entry["quote"])
+        source = entry["source_reference"].strip() or card["source_reference"].strip() or "منبع ثبت نشده"
+        sources[source] = sources.get(source, 0) + 1
+        paragraph("منبع: " + source, size=9)
+        paragraph("وضعیت بازبینی: " + review_labels[entry["review_status"]], size=9)
+        matching = any(p.page_number == entry["page_number"] and entry["quote"] in p.raw_text for p in pages)
+        paragraph("تطابق متن: " + ("تطابق دقیق با متن ذخیره‌شدهٔ صفحه" if matching else "نیازمند تطبیق با اصل صفحه"), size=9)
+        if entry["reviewer_note"]:
+            paragraph("یادداشت بازبین: " + entry["reviewer_note"])
+    paragraph("مجموعه و منابع سند", True, 14)
+    paragraph("مجموعه: " + (card["folder_path"] or "بدون پوشه"))
+    for source, count in sources.items():
+        paragraph(f"{source} · {_fa_digits(count)} شاهد")
+    if not sources:
+        paragraph("منبعی ثبت نشده است.")
     paragraph("متن زیر خروجی استخراج یا اصلاح دستی است؛ تطبیق نهایی با اصل سند لازم است.", size=9)
     if not pages:
         paragraph(item.text or "هنوز متنی برای این سند استخراج نشده است.")

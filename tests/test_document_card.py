@@ -102,3 +102,52 @@ def test_lease_renews_during_slow_processing_and_rejects_stale_failure():
             conn.execute("UPDATE jobs SET worker_id = 'second' WHERE id = ?", (job.id,))
         result = JobQueueRepository.mark_job_failed_or_retry(job.id, "first", "OLD", "stale worker")
         assert result.state == "RUNNING" and result.worker_id == "second"
+
+
+def test_evidence_roundtrip_matching_and_word_report():
+    with TestClient(app) as client:
+        fid = client.post("/api/v1/files/import", files={"file": ("evidence.txt", "سند آموزشی\nمتن دقیق فارسی برای شاهد".encode(), "text/plain")}).json()["id"]
+        url = f"/api/v1/files/{fid}/card"
+        payload = {"folder_path": "آموزش", "source_reference": "مرجع اصلی", "notes": "یادداشت بازبین",
+                   "evidence": [{"id": "quote-1", "quote": "متن دقیق فارسی", "page_number": 1,
+                                 "source_reference": "کتاب نمونه", "review_status": "pending", "reviewer_note": "بازبینی لازم است"},
+                                {"id": "quote-2", "quote": "این متن در صفحه نیست", "page_number": 1, "review_status": "confirmed"}]}
+        r = client.put(url, json=payload)
+        assert r.status_code == 200
+        evidence = r.json()["evidence"]
+        assert evidence[0]["quote_matches_page"] is True
+        assert evidence[0]["review_status"] == "pending"  # exact matching never implies approval
+        assert evidence[1]["quote_matches_page"] is False
+        # Backward-compatible metadata clients must not erase stored evidence.
+        assert len(client.put(url, json={"notes": "تغییر یادداشت"}).json()["evidence"]) == 2
+        report = client.get(f"/api/v1/files/{fid}/document-word")
+        text = "\n".join(p.text for p in Document(io.BytesIO(report.content)).paragraphs)
+        for value in ("شواهد مستند", "متن دقیق فارسی", "کتاب نمونه", "نیازمند بازبینی", "تأییدشده توسط بازبین", "نیازمند تطبیق با اصل صفحه"):
+            assert value in text
+        # Matching is recomputed after manual page edits.
+        client.patch(f"/api/v1/files/{fid}/pages/1", json={"raw_text": "متن تغییر کرد"})
+        assert client.get(url).json()["evidence"][0]["quote_matches_page"] is False
+        assert client.put(url, json={"evidence": []}).json()["evidence"] == []
+
+
+def test_evidence_validation():
+    with TestClient(app) as client:
+        fid = client.post("/api/v1/files/import", files={"file": ("valid.txt", b"document", "text/plain")}).json()["id"]
+        url = f"/api/v1/files/{fid}/card"
+        for evidence in ([{"quote": "   ", "page_number": 1}],
+                         [{"quote": "text", "page_number": 99}],
+                         [{"quote": "text", "page_number": 1, "review_status": "automatic"}],
+                         [{"id": "duplicate", "quote": "text", "page_number": 1}] * 2):
+            assert client.put(url, json={"evidence": evidence}).status_code == 422
+
+
+def test_collection_summary_and_pagination():
+    with TestClient(app) as client:
+        assert client.get("/api/v1/collections").json()["total_documents"] == 0
+        for index, folder in enumerate(("آموزش", "آموزش", "پژوهش")):
+            fid = client.post("/api/v1/files/import", files={"file": (f"doc-{index}.txt", f"document {index}".encode(), "text/plain")}).json()["id"]
+            client.put(f"/api/v1/files/{fid}/card", json={"folder_path": folder, "source_reference": "منبع یکسان"})
+        summary = client.get("/api/v1/collections", params={"limit": 1}).json()
+        assert summary["total_documents"] == 3 and summary["total_collections"] == 2
+        assert summary["items"] == [{"folder_path": "آموزش", "document_count": 2, "source_count": 1}]
+        assert client.get("/api/v1/collections", params={"offset": 1, "limit": 1}).json()["items"][0]["folder_path"] == "پژوهش"
