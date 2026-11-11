@@ -388,18 +388,22 @@ def render_page_preview_png(
         "fonts",
         "Vazirmatn.ttf",
     )
-    if not os.path.exists(font_path):
-        font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-
-    try:
-        header_font = ImageFont.truetype(font_path, 20)
-        body_font = ImageFont.truetype(font_path, 22)
-    except Exception:
-        header_font = ImageFont.load_default()
-        body_font = ImageFont.load_default()
+    candidates = [font_path, os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts", "tahoma.ttf"),
+                  "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+    header_font = ImageFont.load_default()
+    body_font = ImageFont.load_default()
+    for candidate in candidates:
+        try:
+            header_font = ImageFont.truetype(candidate, 20)
+            body_font = ImageFont.truetype(candidate, 22)
+            break
+        except (OSError, ValueError):
+            continue
+    from PIL import features
+    layout = {"direction": "rtl", "language": "fa"} if features.check_feature("raqm") else {}
 
     header_str = f"صفحهٔ {page_number} — {title or os.path.basename(file_path)}"
-    draw.text((60, 50), header_str, font=header_font, fill=(95, 108, 103))
+    draw.text((canvas_w - 60, 50), header_str, font=header_font, fill=(95, 108, 103), anchor="ra", **layout)
     draw.line([(60, 88), (canvas_w - 60, 88)], fill=(224, 219, 209), width=1)
 
     body_lines = (fallback_text or "بدون متن قابل نمایش در این صفحه").splitlines()[:24]
@@ -407,7 +411,7 @@ def render_page_preview_png(
     for line in body_lines:
         clipped = line.strip()[:85]
         if clipped:
-            draw.text((60, y_cursor), clipped, font=body_font, fill=(28, 37, 34))
+            draw.text((canvas_w - 60, y_cursor), clipped, font=body_font, fill=(28, 37, 34), anchor="ra", **layout)
         y_cursor += 38
 
     buf = io.BytesIO()

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
 import {
@@ -115,6 +115,15 @@ function App() {
   const [selectedInitialPage, setSelectedInitialPage] = useState<number | null>(null);
   const [adding, setAdding] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [fileOffset, setFileOffset] = useState(0);
+  const [hasMoreFiles, setHasMoreFiles] = useState(false);
+  const [folderFilter, setFolderFilter] = useState("");
+  const [mediaFilter, setMediaFilter] = useState("");
+  const [topicFilter, setTopicFilter] = useState("");
+  const loadSequence = useRef(0);
+  const pageSize = 50;
+
+  useEffect(() => { setFileOffset(0); }, [kind, query, page, folderFilter, mediaFilter, topicFilter]);
 
   // Safe migration preview & execution state
   const [migrationReport, setMigrationReport] = useState<LegacyMigrationReport | null>(null);
@@ -122,9 +131,11 @@ function App() {
   const [migrationBusy, setMigrationBusy] = useState(false);
 
   const loadFromBackend = useCallback(async () => {
+    const sequence = ++loadSequence.current;
     setLoading(true);
     try {
       const health = await ArchiveApiClient.checkHealth();
+      if (sequence !== loadSequence.current) return;
       if (health.status === "starting") {
         setConnectionMode("checking");
         setApiErrorBanner("");
@@ -138,10 +149,12 @@ function App() {
         setResourceMode(health.resource_mode);
       }
       setWorkerOnline(health.worker_online ?? true);
+      await ArchiveApiClient.initializeSession();
 
       const statusFilter = page === "بازبینی" ? "نیازمند بازبینی" : undefined;
       const [fetchedFiles, fetchedStats, fetchedJobs, fetchedOcr] = await Promise.all([
-        ArchiveApiClient.listFiles(kind, query, statusFilter),
+        ArchiveApiClient.listFiles(kind, query, statusFilter, pageSize + 1, fileOffset,
+          { folderPath: folderFilter, mediaKind: mediaFilter, topic: topicFilter }),
         ArchiveApiClient.getStats(),
         ArchiveApiClient.listJobs({
           state: jobStateFilter,
@@ -150,7 +163,9 @@ function App() {
         }),
         ArchiveApiClient.getOcrStatus().catch(() => null),
       ]);
-      setItems(fetchedFiles);
+      if (sequence !== loadSequence.current) return;
+      setHasMoreFiles(fetchedFiles.length > pageSize);
+      setItems(fetchedFiles.slice(0, pageSize));
       setStats(fetchedStats);
       setJobs(fetchedJobs.items);
       setJobStats(fetchedJobs.stats);
@@ -163,6 +178,7 @@ function App() {
       setApiErrorBanner("");
       setConnectionMode("connected");
     } catch (err: any) {
+      if (sequence !== loadSequence.current) return;
       if (err?.code === "BACKEND_STARTING" || err?.status === 425) {
         setConnectionMode("checking");
         setApiErrorBanner("");
@@ -174,9 +190,9 @@ function App() {
         );
       }
     } finally {
-      setLoading(false);
+      if (sequence === loadSequence.current) setLoading(false);
     }
-  }, [kind, query, page, jobStateFilter, jobStageFilter]);
+  }, [kind, query, page, jobStateFilter, jobStageFilter, fileOffset, folderFilter, mediaFilter, topicFilter]);
 
   const loadDemoData = useCallback(() => {
     let filtered = [...demoItems];
@@ -375,10 +391,16 @@ function App() {
         "در حالت نمایشی امکان ذخیره‌سازی واقعی فایل وجود ندارد. لطفاً ابتدا به حالت آرشیو اصلی (متصل به بک‌اند) بازگردید.",
       );
     }
+    const errors: string[] = [];
+    let imported = 0;
     for (let i = 0; i < files.length; i++) {
-      await ArchiveApiClient.importFile(files[i], topic, { asyncMode: true });
+      try {
+        await ArchiveApiClient.importFile(files[i], topic, { asyncMode: true });
+        imported++;
+      } catch (err: any) { errors.push(`${files[i].name}: ${err.message}`); }
     }
     await loadFromBackend();
+    if (errors.length) throw new Error(`${digits(imported)} فایل ثبت شد؛ ${digits(errors.length)} فایل ثبت نشد. ${errors.slice(0, 5).join("؛ ")}`);
   };
 
   const handleInspectMigration = async () => {
@@ -645,6 +667,23 @@ function App() {
                       </button>
                     </div>
                   </section>
+                  {connectionMode !== "demo" && <section className="document-card-grid" aria-label="فیلتر مشخصات اسناد">
+                    <label>پوشهٔ شخصی (نام کامل)
+                      <input value={folderFilter} onChange={e => setFolderFilter(e.target.value)} placeholder="مثلاً مجموعه/اسناد" />
+                    </label>
+                    <label>نوع ثبت‌شده در شناسنامه
+                      <select value={mediaFilter} onChange={e => setMediaFilter(e.target.value)}>
+                        <option value="">همهٔ انواع</option>
+                        {["اسکرین‌شات", "عکس دوربین", "سند اسکن‌شده", "تصویر گرافیکی", "سند متنی"].map(value => <option key={value}>{value}</option>)}
+                      </select>
+                    </label>
+                    <label>موضوع سند
+                      <select value={topicFilter} onChange={e => setTopicFilter(e.target.value)}>
+                        <option value="">همهٔ موضوع‌ها</option>
+                        {["اجتماعی", "اقتصادی", "امنیتی", "جاسوسی", "دفاعی (نظامی، کویر و مرز)", "دین و روحانیت", "رزمایش", "سایبری", "سیاسی", "علم و فناوری", "فرهنگی", "هواگرد (پهپاد، ریزپرنده، جنگنده و ...)", "آموزش", "طراحی", "کار"].map(value => <option key={value}>{value}</option>)}
+                      </select>
+                    </label>
+                  </section>}
                   <div className="sectionline">
                     <h2>
                       {query ? "نتیجهٔ جست‌وجو" : "فایل‌های آرشیو"}{" "}
@@ -658,6 +697,11 @@ function App() {
                           : "پایگاه‌داده پایدار SQLite + FTS5 · کارگر پس‌زمینه فعال"}
                     </span>
                   </div>
+                  {connectionMode === "connected" && <nav className="pagination" aria-label="صفحه‌بندی کتابخانه">
+                    <button disabled={loading || fileOffset === 0} onClick={() => setFileOffset(Math.max(0, fileOffset - pageSize))}>صفحهٔ قبل</button>
+                    <span>صفحهٔ {digits(Math.floor(fileOffset / pageSize) + 1)}</span>
+                    <button disabled={loading || !hasMoreFiles} onClick={() => setFileOffset(fileOffset + pageSize)}>صفحهٔ بعد</button>
+                  </nav>}
                   <section className={`files ${view}`}>
                     {items.map((item) => (
                       <button

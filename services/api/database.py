@@ -291,6 +291,8 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
         );
         """)
 
+        _ensure_column(conn, "files", "card_json", "TEXT NOT NULL DEFAULT '{}'")
+        _record_schema_migration(conn, "004_document_card", "General document metadata")
         _record_schema_migration(conn, "002_milestone_2_durable_jobs", "Durable jobs, job_events, worker_registry, and migration_audit_log tables")
         _record_schema_migration(conn, "003_milestone_3_ocr_and_pages_fts", "Page-level OCR text, bounding boxes, page error tracking, and pages_fts virtual table")
 

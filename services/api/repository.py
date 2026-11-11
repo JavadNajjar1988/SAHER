@@ -4,6 +4,8 @@ import uuid
 import zlib
 import struct
 import hashlib
+import json
+import time
 import sqlite3
 from typing import Dict, List, Optional, AsyncIterator, Any
 from services.api.config import settings
@@ -308,6 +310,9 @@ class ArchiveRepository:
         archive_id: str = "default",
         limit: int = 100,
         offset: int = 0,
+        folder_path: Optional[str] = None,
+        media_kind: Optional[str] = None,
+        topic: Optional[str] = None,
     ) -> List[FileItemDTO]:
         with get_db() as conn:
             cur = conn.cursor()
@@ -342,6 +347,11 @@ class ArchiveRepository:
                     sql += " AND f.status = ?"
                     params.append(status)
 
+                for column, value in (("json_extract(f.card_json, '$.folder_path')", folder_path),
+                                      ("json_extract(f.card_json, '$.media_kind')", media_kind), ("f.topic", topic)):
+                    if value:
+                        sql += f" AND {column} = ?"
+                        params.append(value)
                 sql += " ORDER BY rank, f.created_at DESC, f.id ASC LIMIT ? OFFSET ?"
                 params.extend([limit, offset])
 
@@ -387,6 +397,11 @@ class ArchiveRepository:
                     sql += " AND f.status = ?"
                     params.append(status)
 
+                for column, value in (("json_extract(f.card_json, '$.folder_path')", folder_path),
+                                      ("json_extract(f.card_json, '$.media_kind')", media_kind), ("f.topic", topic)):
+                    if value:
+                        sql += f" AND {column} = ?"
+                        params.append(value)
                 sql += " ORDER BY f.created_at DESC, f.id ASC LIMIT ? OFFSET ?"
                 params.extend([limit, offset])
 
@@ -614,6 +629,7 @@ class ArchiveRepository:
         archive_id: str = "default",
         custom_topic: Optional[str] = None,
         async_mode: bool = False,
+        folder_path: Optional[str] = None,
     ) -> FileItemDTO:
         """
         1. Validates upload extension and binary signature.
@@ -687,8 +703,8 @@ class ArchiveRepository:
                     """
                     INSERT INTO files (
                         id, archive_id, title, kind, topic, status, mime_type,
-                        file_size, sha256, storage_path, color_scheme, processing_version
-                    ) VALUES (?, ?, ?, ?, ?, 'در صف', ?, ?, ?, ?, ?, 1)
+                        file_size, sha256, storage_path, color_scheme, processing_version, card_json
+                    ) VALUES (?, ?, ?, ?, ?, 'در صف', ?, ?, ?, ?, ?, 1, ?)
                     """,
                     (
                         file_id,
@@ -701,6 +717,7 @@ class ArchiveRepository:
                         sha256_hash,
                         final_storage_path,
                         color,
+                        json.dumps({"folder_path": folder_path or ""}, ensure_ascii=False),
                     ),
                 )
 
@@ -743,6 +760,19 @@ class ArchiveRepository:
         from services.worker.runner import default_worker
 
         job_result = default_worker.process_one(specific_job_id=job_id)
+        # The background worker may have claimed the job while the upload thread
+        # was registering it. A synchronous request must still wait for its result.
+        until = time.monotonic() + settings.job_timeout_seconds + 5
+        while job_result is None or job_result.state == JobState.RUNNING.value or (
+            job_result.state == JobState.QUEUED.value and job_result.attempt_count == 0
+        ):
+            if time.monotonic() >= until:
+                raise IngestionValidationError(
+                    "فایل ذخیره شد و پردازش آن ادامه دارد؛ وضعیت را در صف پردازش بررسی کنید.",
+                    code="SYNC_PROCESSING_TIMEOUT", status_code=504,
+                )
+            time.sleep(0.02)
+            job_result = JobQueueRepository.get_job(job_id, include_events=False)
         if job_result and job_result.state == JobState.FAILED.value:
             err_code = job_result.error_code or "EXTRACTION_FAILED"
             err_msg = job_result.error_message or "خطا در استخراج محتوای فایل."
@@ -769,6 +799,7 @@ class ArchiveRepository:
         archive_id: str = "default",
         custom_topic: Optional[str] = None,
         async_mode: bool = False,
+        folder_path: Optional[str] = None,
     ) -> FileItemDTO:
         """
         Streams an incoming upload to disk with bounded memory, computing SHA-256 on the fly
@@ -802,7 +833,8 @@ class ArchiveRepository:
                     status_code=400,
                 )
 
-            return cls._ingest_temp_file(
+            from starlette.concurrency import run_in_threadpool
+            return await run_in_threadpool(cls._ingest_temp_file,
                 temp_path=temp_path,
                 raw_filename=filename,
                 file_size=total_bytes,
@@ -810,6 +842,7 @@ class ArchiveRepository:
                 archive_id=archive_id,
                 custom_topic=custom_topic,
                 async_mode=async_mode,
+                folder_path=folder_path,
             )
         except (
             IngestionValidationError,

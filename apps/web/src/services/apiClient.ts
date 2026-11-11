@@ -11,6 +11,19 @@ import {
   LegacyMigrationResult,
 } from "../types/archive";
 
+export interface DocumentCardData {
+  folder_path: string;
+  subject: string;
+  media_kind: string;
+  location_label: string;
+  source_reference: string;
+  notes: string;
+  detected_media_kind: string;
+  detection_evidence: string;
+  width?: number | null;
+  height?: number | null;
+}
+
 export class ApiClientError extends Error {
   status: number;
   code: string;
@@ -164,6 +177,11 @@ export class ArchiveApiClient {
     this.sessionToken = token;
   }
 
+  static async initializeSession(): Promise<void> {
+    const session = await this.requestJson<{ session_token: string | null }>("/api/v1/auth/session");
+    this.setSessionToken(session.session_token);
+  }
+
   private static buildUrl(path: string): string {
     const origin = getConfiguredOrigin();
     return `${origin}${path}`;
@@ -265,6 +283,7 @@ export class ArchiveApiClient {
     status?: string,
     limit: number = 100,
     offset: number = 0,
+    filters?: { folderPath?: string; mediaKind?: string; topic?: string },
   ): Promise<FileItem[]> {
     const params = new URLSearchParams();
     if (kind && kind !== "همهٔ فایل‌ها") params.set("kind", kind);
@@ -272,6 +291,9 @@ export class ArchiveApiClient {
     if (status) params.set("status", status);
     params.set("limit", String(limit));
     params.set("offset", String(offset));
+    if (filters?.folderPath) params.set("folder_path", filters.folderPath);
+    if (filters?.mediaKind) params.set("media_kind", filters.mediaKind);
+    if (filters?.topic) params.set("topic", filters.topic);
 
     const qs = params.toString();
     return this.requestJson<FileItem[]>(`/api/v1/files${qs ? `?${qs}` : ""}`, {
@@ -283,6 +305,22 @@ export class ArchiveApiClient {
     return this.requestJson<FileItem>(`/api/v1/files/${encodeURIComponent(fileId)}`, {
       method: "GET",
     });
+  }
+
+  static async getDocumentCard(fileId: string): Promise<DocumentCardData> {
+    return this.requestJson(`/api/v1/files/${encodeURIComponent(fileId)}/card`);
+  }
+
+  static async saveDocumentCard(fileId: string, card: DocumentCardData): Promise<DocumentCardData> {
+    return this.requestJson(`/api/v1/files/${encodeURIComponent(fileId)}/card`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(card),
+    });
+  }
+
+  static async downloadDocumentWord(fileId: string): Promise<Blob> {
+    const response = await fetch(this.buildUrl(`/api/v1/files/${encodeURIComponent(fileId)}/document-word`));
+    if (!response.ok) throw new ApiClientError({ message: "تولید سند Word انجام نشد.", status: response.status });
+    return response.blob();
   }
 
   static getFileContentUrl(fileId: string): string {
@@ -329,6 +367,10 @@ export class ArchiveApiClient {
   ): Promise<FileItem> {
     const formData = new FormData();
     formData.append("file", file);
+    if (file.webkitRelativePath) {
+      const path = file.webkitRelativePath.split("/").slice(0, -1).join("/");
+      if (path) formData.append("folder_path", path);
+    }
     if (topic) formData.append("topic", topic);
     const asyncMode = options?.asyncMode ?? true;
     formData.append("async_mode", asyncMode ? "true" : "false");

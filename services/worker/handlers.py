@@ -62,7 +62,13 @@ def _detail_from_checkpoint_dict(d: Dict[str, Any]) -> PageExtractionDetail:
     )
 
 
-def execute_job_pipeline(
+def execute_job_pipeline(job, worker_id, stage_throttle_seconds=0.0, lease_seconds=30):
+    from services.worker.execution import execution_lease
+    with execution_lease(job.id, worker_id, lease_seconds, settings.job_timeout_seconds):
+        return _execute_job_pipeline(job, worker_id, stage_throttle_seconds, lease_seconds)
+
+
+def _execute_job_pipeline(
     job: JobItemDTO,
     worker_id: str,
     stage_throttle_seconds: float = 0.0,

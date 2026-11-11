@@ -77,11 +77,36 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+from services.api.document_card import DocumentCard, get_card, save_card
+
+
+@app.get(f"{settings.api_prefix}/files/{{file_id}}/card")
+def read_document_card(file_id: str):
+    return get_card(file_id)
+
+
+@app.put(f"{settings.api_prefix}/files/{{file_id}}/card")
+def write_document_card(file_id: str, payload: DocumentCard):
+    return save_card(file_id, payload)
+
+
+@app.get(f"{settings.api_prefix}/files/{{file_id}}/document-word")
+def export_document_word(file_id: str):
+    from services.analysis.document_exporter import generate_document_docx
+    card = get_card(file_id)
+    item = ArchiveRepository.get_file(file_id)
+    pages = ArchiveRepository.get_file_pages(file_id)
+    return Response(
+        content=generate_document_docx(item, pages, card),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": 'attachment; filename="saher-document.docx"'},
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=[
         "Content-Type",
         "Accept",
@@ -288,6 +313,9 @@ def list_files(
     status: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    folder_path: Optional[str] = Query(None, max_length=500),
+    media_kind: Optional[str] = Query(None, max_length=100),
+    topic: Optional[str] = Query(None, max_length=500),
 ):
     return ArchiveRepository.list_files(
         kind=kind,
@@ -295,6 +323,9 @@ def list_files(
         status=status,
         limit=limit,
         offset=offset,
+        folder_path=folder_path,
+        media_kind=media_kind,
+        topic=topic,
     )
 
 
@@ -381,6 +412,7 @@ async def import_file(
     request: Request,
     file: UploadFile = File(...),
     topic: Optional[str] = Form(None),
+    folder_path: Optional[str] = Form(None, max_length=500),
     async_mode: Optional[bool] = Form(None),
     async_query: Optional[bool] = Query(None, alias="async_mode"),
 ):
@@ -400,6 +432,7 @@ async def import_file(
             filename=filename,
             chunk_iterator=chunk_reader(),
             custom_topic=topic,
+            folder_path=folder_path,
             async_mode=use_async,
         )
     finally:
