@@ -16,5 +16,15 @@
     "test:api": "node scripts/dev_runner.mjs pytest",
     "test:web": "npx --yes tsx --test apps/web/src/services/apiClient.test.ts",
     "preview": "npm run preview --workspace=apps/web"
+  },
+  "dependencies": {
+    "react": "19.0.0",
+    "react-dom": "19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.0.8",
+    "@types/react-dom": "19.0.3",
+    "typescript": "5.7.3",
+    "vite": "6.1.0"
   }
 }

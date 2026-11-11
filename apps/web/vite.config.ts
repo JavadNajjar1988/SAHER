@@ -6,8 +6,10 @@ function createGracefulProxy(isHealthRoute: boolean) {
   return {
     target: backendTarget,
     changeOrigin: false,
+    xfwd: true,
     configure: (proxy: any) => {
-      proxy.on("error", (_err: unknown, _req: any, res: any) => {
+      const origOn = proxy.on.bind(proxy);
+      origOn("error", (_err: unknown, _req: any, res: any) => {
         if (!res || res.headersSent || typeof res.writeHead !== "function") {
           return;
         }
@@ -19,20 +21,32 @@ function createGracefulProxy(isHealthRoute: boolean) {
               service: "saher-local-api",
               version: "0.3.0",
               database: "initializing",
+              storage_accessible: true,
               demo_mode: false,
               worker_online: false,
+              ocr_ready: false,
             }),
           );
         } else {
-          res.writeHead(503, { "Content-Type": "application/json; charset=utf-8" });
+          // Use HTTP 425 (Too Early) instead of 503 so Cloud Run / Nginx proxy_intercept_errors
+          // (which intercepts 502/503/504 into HTML /warmup.html) preserves the JSON payload.
+          res.writeHead(425, { "Content-Type": "application/json; charset=utf-8" });
           res.end(
             JSON.stringify({
-              detail: "سرویس محلی ساهر در حال راه‌اندازی است. لطفاً چند ثانیه صبر کنید.",
+              detail: "سرویس محلی ساهر در حال راه‌اندازی اولیه است. لطفاً چند ثانیه صبر کنید…",
               code: "BACKEND_STARTING",
             }),
           );
         }
       });
+      // Prevent Vite's default proxyMiddleware from registering its redundant
+      // stderr logger (`[vite] http proxy error` / `ECONNREFUSED`) while FastAPI boots.
+      proxy.on = (event: string, listener: (...args: any[]) => void) => {
+        if (event === "error") {
+          return proxy;
+        }
+        return origOn(event, listener);
+      };
     },
   };
 }

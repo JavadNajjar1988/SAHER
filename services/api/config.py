@@ -4,6 +4,22 @@ from typing import List
 from pydantic import BaseModel, Field
 
 
+def _add_origin_with_ais_variants(origins: List[str], raw_val: str) -> None:
+    cleaned = (raw_val or "").strip().rstrip("/")
+    if not cleaned:
+        return
+    if not cleaned.startswith(("http://", "https://", "app://")):
+        cleaned = f"https://{cleaned}"
+    candidates = [cleaned]
+    if "://ais-dev-" in cleaned:
+        candidates.append(cleaned.replace("://ais-dev-", "://ais-pre-"))
+    elif "://ais-pre-" in cleaned:
+        candidates.append(cleaned.replace("://ais-pre-", "://ais-dev-"))
+    for cand in candidates:
+        if cand and cand not in origins:
+            origins.append(cand)
+
+
 def _parse_origins_env() -> List[str]:
     default_origins = [
         "http://localhost:3000",
@@ -19,14 +35,13 @@ def _parse_origins_env() -> List[str]:
     raw_env = os.environ.get("SAHER_ALLOWED_ORIGINS", "")
     if raw_env.strip():
         for item in raw_env.split(","):
-            cleaned = item.strip().rstrip("/")
-            if cleaned and cleaned not in default_origins:
-                default_origins.append(cleaned)
+            _add_origin_with_ais_variants(default_origins, item)
 
-    for env_key in ("APP_URL", "SHARED_APP_URL", "VITE_API_BASE_URL"):
-        val = os.environ.get(env_key, "").strip().rstrip("/")
-        if val and val not in default_origins:
-            default_origins.append(val)
+    for env_key in ("APP_URL", "SHARED_APP_URL", "VITE_API_BASE_URL", "NG_ALLOWED_HOSTS"):
+        val = os.environ.get(env_key, "").strip()
+        if val:
+            for part in val.split(","):
+                _add_origin_with_ais_variants(default_origins, part)
 
     return default_origins
 
@@ -41,6 +56,9 @@ def _resolve_default_ocr_model_dir() -> str:
         "/opt/saher-models/tessdata",
         "/usr/share/tesseract-ocr/5/tessdata",
     ]
+    for cand in candidates:
+        if os.path.isdir(cand) and os.path.isfile(os.path.join(cand, "fas.traineddata")):
+            return cand
     for cand in candidates:
         if os.path.isdir(cand) and any(name.endswith(".traineddata") for name in os.listdir(cand)):
             return cand

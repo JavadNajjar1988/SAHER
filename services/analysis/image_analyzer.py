@@ -622,7 +622,7 @@ def build_cultural_social_template(
     # 5. Extract Numeric ID (آیدی عددی)
     numeric_id = ""
     m_num_id = re.search(
-        r"(?:آیدی\s*عددی|ایدی\s*عددی|شناسه\s*عددی|کد\s*عددی|numeric\s*id|user\s*id)\s*[:：\-]?\s*(\d{4,18})",
+        r"(?:آیدی\s*عددی|ایدی\s*عددی|ابدی\s*عددی|بدی\s*عددی|شناسه\s*عددی|کد\s*عددی|numeric\s*id|user\s*id)\s*[:：\-]?\s*(\d{4,18})",
         ascii_text,
         re.IGNORECASE,
     )

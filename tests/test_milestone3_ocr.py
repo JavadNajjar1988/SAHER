@@ -19,7 +19,35 @@ from services.ocr import OCRModelMissingError, TesseractOCREngine
 from services.worker.queue import JobQueueRepository
 from services.worker.runner import WorkerRunner, default_worker
 
-FONT_PATH = Path(__file__).resolve().parent.parent / "data" / "models" / "fonts" / "Vazirmatn.ttf"
+def _resolve_test_font_path() -> Path:
+    repo_root = Path(__file__).resolve().parent.parent
+    primary = repo_root / "data" / "models" / "fonts" / "Vazirmatn.ttf"
+    bundled = repo_root / "apps" / "web" / "public" / "fonts" / "Vazirmatn.woff2"
+    if bundled.is_file():
+        try:
+            primary.parent.mkdir(parents=True, exist_ok=True)
+            primary.write_bytes(bundled.read_bytes())
+            return primary
+        except Exception:
+            return bundled
+    if primary.is_file():
+        return primary
+    for sys_cand in (
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        Path("/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf"),
+    ):
+        if sys_cand.is_file():
+            try:
+                primary.parent.mkdir(parents=True, exist_ok=True)
+                primary.write_bytes(sys_cand.read_bytes())
+                return primary
+            except Exception:
+                return sys_cand
+    return primary
+
+
+FONT_PATH = _resolve_test_font_path()
+
 
 
 @pytest.fixture(autouse=True)

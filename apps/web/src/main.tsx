@@ -123,9 +123,13 @@ function App() {
 
   const loadFromBackend = useCallback(async () => {
     setLoading(true);
-    setApiErrorBanner("");
     try {
       const health = await ArchiveApiClient.checkHealth();
+      if (health.status === "starting") {
+        setConnectionMode("checking");
+        setApiErrorBanner("");
+        return;
+      }
       setBackendVersion(health.version);
       if (health.max_upload_size_bytes) {
         setMaxUploadBytes(health.max_upload_size_bytes);
@@ -156,13 +160,19 @@ function App() {
       if (fetchedOcr) {
         setOcrStatus(fetchedOcr);
       }
+      setApiErrorBanner("");
       setConnectionMode("connected");
     } catch (err: any) {
-      setConnectionMode("disconnected");
-      setApiErrorBanner(
-        err?.message ||
-          "ارتباط با سرویس محلی ساهر (FastAPI) برقرار نشد. عملیات آرشیو تا زمان اتصال مجدد غیرفعال است.",
-      );
+      if (err?.code === "BACKEND_STARTING" || err?.status === 425) {
+        setConnectionMode("checking");
+        setApiErrorBanner("");
+      } else {
+        setConnectionMode("disconnected");
+        setApiErrorBanner(
+          err?.message ||
+            "ارتباط با سرویس محلی ساهر (FastAPI) برقرار نشد. عملیات آرشیو تا زمان اتصال مجدد غیرفعال است.",
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -214,6 +224,16 @@ function App() {
       loadFromBackend();
     }
   }, [connectionMode, loadFromBackend, loadDemoData]);
+
+  // Automatically retry connection while backend is warming up ("checking") or temporarily unreachable ("disconnected")
+  useEffect(() => {
+    if (connectionMode !== "checking" && connectionMode !== "disconnected") return;
+    const retryMs = connectionMode === "checking" ? 1200 : 2500;
+    const timer = setInterval(() => {
+      loadFromBackend();
+    }, retryMs);
+    return () => clearInterval(timer);
+  }, [connectionMode, loadFromBackend]);
 
   // Poll automatically when jobs are active (QUEUED or RUNNING) or user is viewing the processing dashboard
   const hasActiveJobs = jobStats.queued + jobStats.running > 0;
