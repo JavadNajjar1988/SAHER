@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     tesseract-ocr-fas \
     tesseract-ocr-eng \
+    fonts-dejavu-core \
     libraqm0 \
     libfreetype6 \
     libjpeg62-turbo \
@@ -23,7 +24,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY pyproject.toml ./
 COPY services ./services
-COPY data/models ./data/models
 
 # Store offline OCR models in /opt/saher-models/tessdata as well as /app/data/models/tessdata
 # so mounting a persistent Docker volume on /app/data never shadows the traineddata files.
@@ -49,10 +49,11 @@ FROM node:22-alpine AS web-build
 WORKDIR /app
 
 COPY package.json ./
+COPY package-lock.json ./
 COPY scripts ./scripts
 COPY apps/web/package.json ./apps/web/package.json
 
-RUN npm install
+RUN npm ci
 
 COPY apps/web ./apps/web
 

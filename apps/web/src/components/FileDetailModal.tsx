@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { FileItem, FileUpdatePayload, PageItem } from "../types/archive";
 import { ArchiveApiClient } from "../services/apiClient";
 import { Preview } from "./Preview";
+import { DocumentReport } from "./DocumentReport";
 
 interface FileDetailModalProps {
   selected: FileItem;
@@ -212,7 +213,7 @@ export function FileDetailModal({
   if (selected.matched_page) matchedPagesSet.add(selected.matched_page);
 
   const displayedPageText = activePageObj
-    ? activePageObj.normalized_text || activePageObj.raw_text
+    ? activePageObj.raw_text || activePageObj.normalized_text
     : selected.text;
 
   return (
@@ -238,6 +239,7 @@ export function FileDetailModal({
           </button>
         </div>
 
+        {!isDemoMode && <DocumentReport key={selected.id} file={selected} pages={pages} />}
         <div className={`preview large ${selected.color}`}>
           <Preview item={selected} />
         </div>
@@ -591,23 +593,20 @@ export function FileDetailModal({
             <button
               type="button"
               data-testid="export-single-word-btn"
-              title="دریافت گزارش تحلیل ماهیت و موضوع این فایل در قالب Word (.docx)"
+              title="دریافت شناسنامه و متن کامل صفحات در قالب Word فارسی"
               onClick={async () => {
                 setErrorMsg("");
                 try {
-                  const blob = await ArchiveApiClient.downloadImagesWordReport(
-                    [selected.id],
-                    selected.title,
-                  );
+                  const blob = await ArchiveApiClient.downloadDocumentWord(selected.id);
                   const url = URL.createObjectURL(blob);
                   const a = document.createElement("a");
                   a.href = url;
-                  a.download = `تحلیل-${selected.title.replace(/\.[^.]+$/, "")}.docx`;
+                  a.download = `سند-${selected.title.replace(/\.[^.]+$/, "")}.docx`;
                   document.body.appendChild(a);
                   a.click();
                   a.remove();
                   URL.revokeObjectURL(url);
-                  setNotice("گزارش تحلیل Word (.docx) با موفقیت آماده و دانلود شد.");
+                  setNotice("شناسنامه و متن سند Word فارسی دریافت شد.");
                 } catch (err: any) {
                   setErrorMsg(err?.message || "خطا در تولید فایل Word (.docx).");
                 }

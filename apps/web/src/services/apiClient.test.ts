@@ -2,6 +2,35 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { ArchiveApiClient, ApiClientError } from "./apiClient";
 
+test("document card changes use the session token and library filters preserve pagination", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: { url: string; init?: RequestInit }[] = [];
+  try {
+    globalThis.fetch = async (input, init) => {
+      const url = String(input);
+      calls.push({ url, init });
+      return new Response(JSON.stringify(url.endsWith("/auth/session") ? { session_token: "local-test" } : {}),
+        { headers: { "Content-Type": "application/json" } });
+    };
+    await ArchiveApiClient.initializeSession();
+    await ArchiveApiClient.saveDocumentCard("document-1", {
+      folder_path: "اسناد/آموزش", subject: "سند آموزشی", media_kind: "سند متنی", location_label: "",
+      source_reference: "", notes: "یادداشت", detected_media_kind: "سند متنی", detection_evidence: "قالب فایل",
+    });
+    assert.equal(calls[1].init?.method, "PUT");
+    assert.equal(new Headers(calls[1].init?.headers).get("X-Saher-Session-Token"), "local-test");
+    await ArchiveApiClient.listFiles(undefined, "متن", undefined, 51, 50,
+      { folderPath: "اسناد/آموزش", mediaKind: "سند متنی", topic: "آموزش" });
+    const params = new URL(calls[2].url, "http://localhost").searchParams;
+    assert.equal(params.get("folder_path"), "اسناد/آموزش");
+    assert.equal(params.get("limit"), "51");
+    assert.equal(params.get("offset"), "50");
+  } finally {
+    ArchiveApiClient.setSessionToken(null);
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("ArchiveApiClient never silently falls back to localStorage on network outage", async () => {
   const originalFetch = globalThis.fetch;
   try {

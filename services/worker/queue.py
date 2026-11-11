@@ -422,6 +422,8 @@ class JobQueueRepository:
         Updates job processing stage, progress, checkpoint, and extends lease expiration.
         Raises `JobInterruptedException` if the job was paused, cancelled, or reassigned.
         """
+        from services.worker.execution import check_deadline
+        check_deadline()
         lease_sec = max(5, lease_seconds if lease_seconds is not None else settings.job_lease_seconds)
         with get_db() as conn:
             cur = conn.cursor()
@@ -581,6 +583,10 @@ class JobQueueRepository:
 
             # If job was already paused or cancelled externally, respect user action
             if row["state"] in (JobState.PAUSED.value, JobState.CANCELLED.value):
+                return cls.get_job(job_id, include_events=True)
+
+            # A stale worker must never fail or requeue another worker's claim.
+            if row["state"] != JobState.RUNNING.value or row["worker_id"] != worker_id:
                 return cls.get_job(job_id, include_events=True)
 
             attempt = int(row["attempt_count"] or 1)

@@ -14,6 +14,7 @@ export function ImportDialog({
   const [isUploading, setIsUploading] = useState(false);
   const [selectedTopic, setSelectedTopic] = useState("کار");
   const [errorMessage, setErrorMessage] = useState("");
+  const [folderMode, setFolderMode] = useState(false);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = e.target.files;
@@ -54,7 +55,7 @@ export function ImportDialog({
           </button>
         </div>
         <p>
-          فایل انتخابی پس از بررسی امضای باینری و محاسبهٔ هش SHA-256، در مخزن محلی ذخیره شده و یک کار پردازشی پایدار (Job) برای استخراج متن و نمایه‌سازی FTS5 در کارگر پس‌زمینه ایجاد می‌شود.
+          فایل‌ها در آرشیو محلی ذخیره می‌شوند و استخراج متن در پس‌زمینه انجام می‌شود. هنگام انتخاب پوشه، نام پوشه‌ها و زیرپوشه‌ها نیز در شناسنامهٔ اسناد حفظ می‌شود.
         </p>
 
         <div className="import-topic-group">
@@ -77,17 +78,21 @@ export function ImportDialog({
           </select>
         </div>
 
+        <label><input type="checkbox" checked={folderMode} disabled={isUploading}
+          onChange={event => setFolderMode(event.target.checked)} /> انتخاب یک پوشه با زیرپوشه‌ها</label>
         <label className={isUploading ? "dropzone uploading" : "dropzone"}>
           <span>{isUploading ? "◌" : "＋"}</span>
           <strong>
             {isUploading
               ? "در حال ارسال، اعتبارسنجی باینری و ثبت در صف پردازش…"
-              : "انتخاب فایل از دستگاه"}
+              : folderMode ? "انتخاب پوشه از دستگاه" : "انتخاب فایل از دستگاه"}
           </strong>
           <small>
             فرمت‌های مجاز: TXT, MD, CSV, JSON, PDF, DOCX, PNG, JPG, WEBP, BMP (حداکثر {maxMb} مگابایت)
           </small>
           <input
+            key={String(folderMode)}
+            {...(folderMode ? { webkitdirectory: "", directory: "" } : {})}
             type="file"
             multiple
             accept=".txt,.md,.csv,.json,.log,.pdf,.docx,.png,.jpg,.jpeg,.webp,.bmp"

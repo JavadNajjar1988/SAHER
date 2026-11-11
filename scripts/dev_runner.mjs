@@ -185,19 +185,13 @@ function ensureLocalModels() {
 
   const targetFontsDir = path.join(targetModelsDir, "fonts");
   const targetFontFile = path.join(targetFontsDir, "Vazirmatn.ttf");
-  const bundledVazirmatn = path.join(rootDir, "apps", "web", "public", "fonts", "Vazirmatn.woff2");
-  if (fs.existsSync(bundledVazirmatn)) {
-    try {
-      fs.mkdirSync(targetFontsDir, { recursive: true });
-      fs.copyFileSync(bundledVazirmatn, targetFontFile);
-      const cacheFontsDir = path.join(cachedModelsDir, "fonts");
-      fs.mkdirSync(cacheFontsDir, { recursive: true });
-      fs.copyFileSync(bundledVazirmatn, path.join(cacheFontsDir, "Vazirmatn.ttf"));
-    } catch {
-      // Ignore copy errors
-    }
-  } else if (!fs.existsSync(targetFontFile)) {
+  // Renaming WOFF2 to TTF does not convert the font. Use an actual TTF file.
+  const invalidFont = fs.existsSync(targetFontFile) &&
+    ["wOF2", "wOFF"].includes(fs.readFileSync(targetFontFile).subarray(0, 4).toString("ascii"));
+  if (!fs.existsSync(targetFontFile) || invalidFont) {
     const sysFonts = [
+      path.join(rootDir, "apps", "web", "public", "fonts", "Vazirmatn.ttf"),
+      path.join(process.env.WINDIR || "C:\\Windows", "Fonts", "tahoma.ttf"),
       "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
       "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
     ];

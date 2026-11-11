@@ -230,11 +230,13 @@ class TesseractOCREngine(OCREngineAdapter):
         tess_config = f'--tessdata-dir "{status.model_dir}" --oem 1 --psm 6'
 
         try:
+            from services.worker.execution import remaining_seconds
             data = pytesseract.image_to_data(
                 img,
                 lang=lang_spec,
                 config=tess_config,
                 output_type=pytesseract.Output.DICT,
+                timeout=remaining_seconds(max(1, settings.job_timeout_seconds)),
             )
         except Exception as exc:
             raise OCRPageReadError(
