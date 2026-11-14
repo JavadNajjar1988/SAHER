@@ -444,3 +444,100 @@ export interface IdentityProfileListResponse {
   items: IdentityProfileItem[];
 }
 
+export interface UserReportKeyValue {
+  label: string;
+  value: string;
+}
+
+export interface UserReportAnalysisSection {
+  title: string;
+  content: string;
+}
+
+export interface UserReportEvidence {
+  meta: string;
+  doc_id: string;
+  offset: string;
+  date: string;
+  source: string;
+  content: string;
+}
+
+export interface UserReportCharge {
+  title: string;
+  count: number;
+  evidences: UserReportEvidence[];
+}
+
+export interface UserReportGroup {
+  name: string;
+  message_count: number;
+  count_label: string;
+}
+
+export interface UserReportMessage {
+  meta: string;
+  date: string;
+  source: string;
+  doc_id: string;
+  content: string;
+}
+
+export interface UserReportSummary {
+  id: string;
+  full_name: string;
+  username: string;
+  telegram_id: string;
+  national_id: string;
+  phone_number: string;
+  city: string;
+  province: string;
+  final_status: string;
+  header_subtitle: string;
+  total_charges: number;
+  total_groups: number;
+  total_messages: number;
+  source_filename: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface UserReportDetail extends UserReportSummary {
+  birth_date: string;
+  gender: string;
+  postal_code: string;
+  virtual_data: UserReportKeyValue[];
+  real_data: UserReportKeyValue[];
+  personality_analysis: UserReportAnalysisSection[];
+  charges: UserReportCharge[];
+  groups: UserReportGroup[];
+  messages: UserReportMessage[];
+}
+
+export interface UserReportCreatePayload {
+  full_name?: string;
+  username?: string;
+  telegram_id?: string;
+  national_id?: string;
+  phone_number?: string;
+  birth_date?: string;
+  gender?: string;
+  postal_code?: string;
+  city?: string;
+  province?: string;
+  final_status?: string;
+  activity_type?: string;
+  behavior_desc?: string;
+  network_desc?: string;
+  interests_desc?: string;
+  key_points?: string;
+  final_reason?: string;
+  default_group?: string;
+  raw_messages_text?: string;
+}
+
+export interface UserReportListResponse {
+  total: number;
+  items: UserReportSummary[];
+}
+

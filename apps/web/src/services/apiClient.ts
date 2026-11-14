@@ -679,5 +679,108 @@ export class ArchiveApiClient {
 
     return await response.blob();
   }
+
+  // 6-Tab Comprehensive User Activity Reports (گزارش جامع کاربر)
+  static async listUserReports(
+    query?: string,
+  ): Promise<import("../types/archive").UserReportListResponse> {
+    const qs = query?.trim() ? `?q=${encodeURIComponent(query.trim())}` : "";
+    return this.requestJson<import("../types/archive").UserReportListResponse>(
+      `/api/v1/user-reports${qs}`,
+      { method: "GET" },
+    );
+  }
+
+  static async getUserReportDetail(
+    reportId: string,
+  ): Promise<import("../types/archive").UserReportDetail> {
+    return this.requestJson<import("../types/archive").UserReportDetail>(
+      `/api/v1/user-reports/${encodeURIComponent(reportId)}`,
+      { method: "GET" },
+      60000,
+    );
+  }
+
+  static async createUserReport(
+    payload: import("../types/archive").UserReportCreatePayload,
+  ): Promise<import("../types/archive").UserReportDetail> {
+    return this.requestJson<import("../types/archive").UserReportDetail>(
+      `/api/v1/user-reports`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+      60000,
+    );
+  }
+
+  static async importUserReportHtml(
+    file: File,
+  ): Promise<import("../types/archive").UserReportDetail> {
+    const formData = new FormData();
+    formData.append("file", file);
+    return this.requestJson<import("../types/archive").UserReportDetail>(
+      `/api/v1/user-reports/import-html`,
+      {
+        method: "POST",
+        body: formData,
+      },
+      90000,
+    );
+  }
+
+  static async deleteUserReport(
+    reportId: string,
+  ): Promise<{ deleted: boolean; id: string }> {
+    return this.requestJson<{ deleted: boolean; id: string }>(
+      `/api/v1/user-reports/${encodeURIComponent(reportId)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  static async downloadUserReportHtml(reportId: string): Promise<Blob> {
+    const headers: Record<string, string> = {
+      "X-Saher-Client": "web-ui/0.3.0",
+    };
+    if (this.sessionToken) {
+      headers["X-Saher-Session-Token"] = this.sessionToken;
+    }
+    const response = await fetch(
+      this.buildUrl(`/api/v1/user-reports/${encodeURIComponent(reportId)}/export-html`),
+      { method: "GET", headers },
+    );
+    if (!response.ok) {
+      throw new ApiClientError({
+        message: "خطا در دریافت خروجی HTML گزارش کاربر",
+        status: response.status,
+        code: "USER_REPORT_HTML_EXPORT_FAILED",
+        isNetworkError: false,
+      });
+    }
+    return await response.blob();
+  }
+
+  static async downloadUserReportWord(reportId: string): Promise<Blob> {
+    const headers: Record<string, string> = {
+      "X-Saher-Client": "web-ui/0.3.0",
+    };
+    if (this.sessionToken) {
+      headers["X-Saher-Session-Token"] = this.sessionToken;
+    }
+    const response = await fetch(
+      this.buildUrl(`/api/v1/user-reports/${encodeURIComponent(reportId)}/export-word`),
+      { method: "GET", headers },
+    );
+    if (!response.ok) {
+      throw new ApiClientError({
+        message: "خطا در دریافت خروجی Word گزارش کاربر (.docx)",
+        status: response.status,
+        code: "USER_REPORT_WORD_EXPORT_FAILED",
+        isNetworkError: false,
+      });
+    }
+    return await response.blob();
+  }
 }
 

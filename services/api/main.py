@@ -10,6 +10,12 @@ from services.analysis.word_exporter import (
     generate_image_analysis_docx,
     generate_identity_profiles_docx,
 )
+from services.analysis.user_report_analyzer import (
+    parse_user_report_html,
+    build_user_report_from_payload,
+    export_user_report_html,
+    generate_user_report_docx,
+)
 from services.api.config import settings
 from services.api.database import init_db, get_db
 from services.api.migrations import LegacyMigrationManager
@@ -48,6 +54,10 @@ from services.api.schemas import (
     IdentityProfileUpsertDTO,
     IdentityProfileListResponseDTO,
     IdentityProfileWordExportRequestDTO,
+    UserReportSummaryDTO,
+    UserReportDetailDTO,
+    UserReportCreateDTO,
+    UserReportListResponseDTO,
 )
 from services.ingestion.extractor import render_page_preview_png
 from services.ocr import (
@@ -907,6 +917,7 @@ def export_single_file_analysis_word(file_id: str):
 
 @app.get(f"{settings.api_prefix}/profiles", response_model=IdentityProfileListResponseDTO)
 def list_identity_profiles(q: Optional[str] = Query(None)):
+    ArchiveRepository.ensure_default_user_report_seeded()
     rows = ArchiveRepository.list_identity_profiles(query=q or "")
     items = [IdentityProfileItemDTO(**r) for r in rows]
     return IdentityProfileListResponseDTO(total=len(items), items=items)
@@ -961,5 +972,98 @@ def export_identity_profiles_word(payload: IdentityProfileWordExportRequestDTO =
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers=headers,
     )
+
+
+# ============================================================================
+# 6-Tab Comprehensive User Activity Reports API (گزارش جامع کاربر)
+# ============================================================================
+
+
+@app.get(f"{settings.api_prefix}/user-reports", response_model=UserReportListResponseDTO)
+def list_user_reports(q: Optional[str] = Query(None)):
+    rows = ArchiveRepository.list_user_reports(query=q or "")
+    items = [UserReportSummaryDTO(**r) for r in rows]
+    return UserReportListResponseDTO(total=len(items), items=items)
+
+
+@app.get(f"{settings.api_prefix}/user-reports/{{report_id}}", response_model=UserReportDetailDTO)
+def get_user_report_detail(report_id: str):
+    detail = ArchiveRepository.get_user_report(report_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="گزارش کاربر یافت نشد.")
+    return UserReportDetailDTO(**detail)
+
+
+@app.post(f"{settings.api_prefix}/user-reports", response_model=UserReportDetailDTO, status_code=201)
+def create_or_analyze_user_report(payload: UserReportCreateDTO):
+    built = build_user_report_from_payload(payload.model_dump())
+    saved = ArchiveRepository.upsert_user_report(built)
+    return UserReportDetailDTO(**saved)
+
+
+@app.put(f"{settings.api_prefix}/user-reports/{{report_id}}", response_model=UserReportDetailDTO)
+def update_user_report(report_id: str, payload: UserReportCreateDTO):
+    built = build_user_report_from_payload(payload.model_dump())
+    saved = ArchiveRepository.upsert_user_report(built, report_id=report_id)
+    return UserReportDetailDTO(**saved)
+
+
+@app.post(f"{settings.api_prefix}/user-reports/import-html", response_model=UserReportDetailDTO, status_code=201)
+async def import_user_report_html_file(file: UploadFile = File(...)):
+    raw_bytes = await file.read()
+    if not raw_bytes:
+        raise HTTPException(status_code=400, detail="فایل بارگذاری‌شده خالی است.")
+    html_text = raw_bytes.decode("utf-8", errors="ignore")
+    parsed = parse_user_report_html(html_text)
+    saved = ArchiveRepository.upsert_user_report(
+        parsed,
+        source_filename=file.filename or "imported_report.html",
+    )
+    return UserReportDetailDTO(**saved)
+
+
+@app.delete(f"{settings.api_prefix}/user-reports/{{report_id}}")
+def delete_user_report(report_id: str):
+    deleted = ArchiveRepository.delete_user_report(report_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="گزارش کاربر یافت نشد.")
+    return {"deleted": True, "id": report_id}
+
+
+@app.get(f"{settings.api_prefix}/user-reports/{{report_id}}/export-html")
+def export_user_report_as_html(report_id: str):
+    detail = ArchiveRepository.get_user_report(report_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="گزارش کاربر یافت نشد.")
+    html_str = export_user_report_html(detail)
+    safe_id = (detail.get("national_id") or report_id)[:16]
+    headers = {
+        "Content-Disposition": f'attachment; filename="user-report-{safe_id}.html"',
+        "X-Content-Type-Options": "nosniff",
+    }
+    return Response(
+        content=html_str.encode("utf-8"),
+        media_type="text/html; charset=utf-8",
+        headers=headers,
+    )
+
+
+@app.get(f"{settings.api_prefix}/user-reports/{{report_id}}/export-word")
+def export_user_report_as_word(report_id: str):
+    detail = ArchiveRepository.get_user_report(report_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="گزارش کاربر یافت نشد.")
+    docx_bytes = generate_user_report_docx(detail)
+    safe_id = (detail.get("national_id") or report_id)[:16]
+    headers = {
+        "Content-Disposition": f'attachment; filename="user-report-{safe_id}.docx"',
+        "X-Content-Type-Options": "nosniff",
+    }
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers=headers,
+    )
+
 
 

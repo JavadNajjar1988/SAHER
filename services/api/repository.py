@@ -1,10 +1,12 @@
 import os
 import re
+import json
 import uuid
 import zlib
 import struct
 import hashlib
 import sqlite3
+from pathlib import Path
 from typing import Dict, List, Optional, AsyncIterator, Any
 from services.api.config import settings
 from services.api.database import get_db
@@ -1388,6 +1390,7 @@ class ArchiveRepository:
 
     @classmethod
     def sync_identity_profiles_from_archive(cls) -> List[Dict[str, Any]]:
+        cls.ensure_default_user_report_seeded()
         files, _ = cls.list_files(limit=200, offset=0)
         for f in files:
             try:
@@ -1399,5 +1402,279 @@ class ArchiveRepository:
             except Exception:
                 pass
         return cls.list_identity_profiles()
+
+    # =========================================================================
+    # 6-Tab User Activity Reports (گزارش جامع کاربر - دیتای مجازی، حقیقی، تحلیل شخصیت، عناوین اتهامی، گروه‌ها و پیام‌ها)
+    # =========================================================================
+
+    @classmethod
+    def _row_to_user_report_summary(cls, row: Any) -> Dict[str, Any]:
+        d = dict(row)
+        return {
+            "id": d["id"],
+            "full_name": d.get("full_name") or "",
+            "username": d.get("username") or "",
+            "telegram_id": d.get("telegram_id") or "",
+            "national_id": d.get("national_id") or "",
+            "phone_number": d.get("phone_number") or "",
+            "city": d.get("city") or "",
+            "province": d.get("province") or "",
+            "final_status": d.get("final_status") or "سیاه",
+            "header_subtitle": d.get("header_subtitle") or "",
+            "total_charges": int(d.get("total_charges") or 0),
+            "total_groups": int(d.get("total_groups") or 0),
+            "total_messages": int(d.get("total_messages") or 0),
+            "source_filename": d.get("source_filename") or "",
+            "created_at": str(d.get("created_at") or ""),
+            "updated_at": str(d.get("updated_at") or ""),
+        }
+
+    @classmethod
+    def _row_to_user_report_detail(cls, row: Any) -> Dict[str, Any]:
+        d = dict(row)
+        summary = cls._row_to_user_report_summary(d)
+
+        def _safe_json(val: Any) -> List[Any]:
+            if isinstance(val, list):
+                return val
+            if not val:
+                return []
+            try:
+                parsed = json.loads(val)
+                return parsed if isinstance(parsed, list) else []
+            except Exception:
+                return []
+
+        return {
+            **summary,
+            "birth_date": d.get("birth_date") or "",
+            "gender": d.get("gender") or "",
+            "postal_code": d.get("postal_code") or "",
+            "virtual_data": _safe_json(d.get("virtual_data_json")),
+            "real_data": _safe_json(d.get("real_data_json")),
+            "personality_analysis": _safe_json(d.get("personality_analysis_json")),
+            "charges": _safe_json(d.get("charges_json")),
+            "groups": _safe_json(d.get("groups_json")),
+            "messages": _safe_json(d.get("messages_json")),
+        }
+
+    @classmethod
+    def ensure_default_user_report_seeded(cls) -> None:
+        """
+        Automatically seeds the attached reference file `public/assets/aistudio/890046190_8b7aba55.html`
+        (گزارش کاربر: علی اکبر آشوری) into `user_activity_reports` and `identity_profiles` if not yet present.
+        """
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) AS cnt FROM user_activity_reports")
+            row = cur.fetchone()
+            if row and int(row["cnt"]) > 0:
+                return
+
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        html_path = repo_root / "public" / "assets" / "aistudio" / "890046190_8b7aba55.html"
+        if not html_path.is_file():
+            return
+
+        try:
+            from services.analysis.user_report_analyzer import parse_user_report_html
+
+            html_content = html_path.read_text(encoding="utf-8", errors="ignore")
+            parsed = parse_user_report_html(html_content)
+            cls.upsert_user_report(
+                parsed,
+                report_id="user-report-890046190",
+                source_filename="890046190_8b7aba55.html",
+            )
+        except Exception:
+            pass
+
+    @classmethod
+    def upsert_user_report(
+        cls,
+        report_data: Dict[str, Any],
+        report_id: Optional[str] = None,
+        source_filename: str = "",
+    ) -> Dict[str, Any]:
+        full_name = (report_data.get("full_name") or "").strip() or "کاربر"
+        username = (report_data.get("username") or "").strip()
+        telegram_id = (report_data.get("telegram_id") or "").strip()
+        national_id = (report_data.get("national_id") or "").strip()
+        phone_number = (report_data.get("phone_number") or "").strip()
+        birth_date = (report_data.get("birth_date") or "").strip()
+        gender = (report_data.get("gender") or "").strip()
+        postal_code = (report_data.get("postal_code") or "").strip()
+        city = (report_data.get("city") or "").strip()
+        province = (report_data.get("province") or "").strip()
+        final_status = (report_data.get("final_status") or "سیاه").strip()
+        header_subtitle = (
+            report_data.get("header_subtitle")
+            or f"آیدی: {username or '—'} | آیدی تلگرام: {telegram_id or '—'} | استان: {province or '—'} | وضعیت: {final_status}"
+        ).strip()
+
+        virtual_data = report_data.get("virtual_data") or []
+        real_data = report_data.get("real_data") or []
+        personality_analysis = report_data.get("personality_analysis") or []
+        charges = report_data.get("charges") or []
+        groups = report_data.get("groups") or []
+        messages = report_data.get("messages") or []
+
+        with get_db() as conn:
+            cur = conn.cursor()
+            target_id = report_id
+            if not target_id and national_id:
+                cur.execute(
+                    "SELECT id FROM user_activity_reports WHERE national_id = ? LIMIT 1",
+                    (national_id,),
+                )
+                r = cur.fetchone()
+                if r:
+                    target_id = r["id"]
+            if not target_id and telegram_id:
+                cur.execute(
+                    "SELECT id FROM user_activity_reports WHERE telegram_id = ? LIMIT 1",
+                    (telegram_id,),
+                )
+                r = cur.fetchone()
+                if r:
+                    target_id = r["id"]
+            if not target_id:
+                target_id = f"urep-{uuid.uuid4().hex[:10]}"
+
+            cur.execute("SELECT id FROM user_activity_reports WHERE id = ?", (target_id,))
+            exists = cur.fetchone() is not None
+
+            vals = (
+                full_name,
+                username,
+                telegram_id,
+                national_id,
+                phone_number,
+                birth_date,
+                gender,
+                postal_code,
+                city,
+                province,
+                final_status,
+                header_subtitle,
+                json.dumps(virtual_data, ensure_ascii=False),
+                json.dumps(real_data, ensure_ascii=False),
+                json.dumps(personality_analysis, ensure_ascii=False),
+                json.dumps(charges, ensure_ascii=False),
+                json.dumps(groups, ensure_ascii=False),
+                json.dumps(messages, ensure_ascii=False),
+                len(charges),
+                len(groups),
+                len(messages),
+                source_filename,
+            )
+
+            if exists:
+                cur.execute(
+                    """
+                    UPDATE user_activity_reports SET
+                        full_name = ?, username = ?, telegram_id = ?, national_id = ?,
+                        phone_number = ?, birth_date = ?, gender = ?, postal_code = ?,
+                        city = ?, province = ?, final_status = ?, header_subtitle = ?,
+                        virtual_data_json = ?, real_data_json = ?, personality_analysis_json = ?,
+                        charges_json = ?, groups_json = ?, messages_json = ?,
+                        total_charges = ?, total_groups = ?, total_messages = ?,
+                        source_filename = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (*vals, target_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO user_activity_reports (
+                        id, full_name, username, telegram_id, national_id,
+                        phone_number, birth_date, gender, postal_code,
+                        city, province, final_status, header_subtitle,
+                        virtual_data_json, real_data_json, personality_analysis_json,
+                        charges_json, groups_json, messages_json,
+                        total_charges, total_groups, total_messages,
+                        source_filename
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (target_id, *vals),
+                )
+
+            cur.execute("SELECT * FROM user_activity_reports WHERE id = ?", (target_id,))
+            saved_row = cur.fetchone()
+
+        # Also sync real/virtual data into identity_profiles so both pages share the dossier
+        try:
+            name_parts = full_name.split()
+            fn = name_parts[0] if name_parts else ""
+            ln = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
+            charge_titles = [str(c.get("title") or "") for c in charges if c.get("title")]
+            jud_summary = f"وضعیت: {final_status}"
+            if charge_titles:
+                jud_summary += f" | عناوین اتهامی ({len(charge_titles)}): " + " ؛ ".join(charge_titles[:6])
+            cls.upsert_identity_profile(
+                {
+                    "first_name": fn,
+                    "last_name": ln,
+                    "full_name": full_name,
+                    "national_id": national_id,
+                    "birth_date": birth_date,
+                    "mobile_phone": phone_number,
+                    "province": province,
+                    "city": city,
+                    "postal_code": postal_code.replace(".0", ""),
+                    "account_handle": f"@{username.lstrip('@')}" if username else "",
+                    "numeric_id": telegram_id,
+                    "personal_folder": f"پوشهٔ شخصی: {full_name} ({username or telegram_id})",
+                    "thematic_category": "سیاسی" if charges else "اجتماعی",
+                    "risk_level": "بحرانی (وضعیت سیاه — اقدام فوری قضایی)" if final_status == "سیاه" else final_status,
+                    "judicial_notes": jud_summary,
+                }
+            )
+        except Exception:
+            pass
+
+        return cls._row_to_user_report_detail(saved_row)
+
+    @classmethod
+    def list_user_reports(cls, query: Optional[str] = None) -> List[Dict[str, Any]]:
+        cls.ensure_default_user_report_seeded()
+        with get_db() as conn:
+            cur = conn.cursor()
+            if query and query.strip():
+                q = f"%{query.strip()}%"
+                cur.execute(
+                    """
+                    SELECT * FROM user_activity_reports
+                    WHERE full_name LIKE ? OR username LIKE ? OR telegram_id LIKE ?
+                       OR national_id LIKE ? OR phone_number LIKE ? OR city LIKE ?
+                       OR province LIKE ?
+                    ORDER BY updated_at DESC, created_at DESC
+                    """,
+                    (q, q, q, q, q, q, q),
+                )
+            else:
+                cur.execute(
+                    "SELECT * FROM user_activity_reports ORDER BY updated_at DESC, created_at DESC"
+                )
+            return [cls._row_to_user_report_summary(r) for r in cur.fetchall()]
+
+    @classmethod
+    def get_user_report(cls, report_id: str) -> Optional[Dict[str, Any]]:
+        cls.ensure_default_user_report_seeded()
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM user_activity_reports WHERE id = ?", (report_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            return cls._row_to_user_report_detail(row)
+
+    @classmethod
+    def delete_user_report(cls, report_id: str) -> bool:
+        with get_db() as conn:
+            cur = conn.execute("DELETE FROM user_activity_reports WHERE id = ?", (report_id,))
+            return cur.rowcount > 0
+
 
 

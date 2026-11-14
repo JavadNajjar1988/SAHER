@@ -1002,3 +1002,72 @@ def test_m3_multi_axis_classification_judicial_and_identity_profiles():
         assert "بلوار وکیل‌آباد" in prof_doc_txt
 
 
+def test_m3_user_activity_report_6_tabs_and_exports():
+    """Verify the 6-tab User Activity Report ('گزارش جامع کاربر') seeded from
+    `public/assets/aistudio/890046190_8b7aba55.html` as well as custom report creation,
+    HTML export, and Persian Word (.docx) export.
+    """
+    import docx
+
+    with TestClient(app) as client:
+        # 1. Verify auto-seeded report from 890046190_8b7aba55.html
+        list_resp = client.get("/api/v1/user-reports")
+        assert list_resp.status_code == 200, list_resp.text
+        reports = list_resp.json()["items"]
+        assert len(reports) >= 1
+
+        ashouri = next((r for r in reports if "890046190" in r["national_id"] or "آشوری" in r["full_name"]), None)
+        assert ashouri is not None
+        assert ashouri["full_name"] == "علی اکبر آشوری"
+        assert ashouri["username"] == "mostafa_1368a"
+        assert ashouri["telegram_id"] == "250556017"
+        assert ashouri["province"] == "خراسان رضوی"
+        assert ashouri["final_status"] == "سیاه"
+        assert ashouri["total_charges"] == 15
+        assert ashouri["total_groups"] == 3
+        assert ashouri["total_messages"] == 500
+
+        # 2. Verify full 6-tab detail payload
+        detail_resp = client.get(f"/api/v1/user-reports/{ashouri['id']}")
+        assert detail_resp.status_code == 200
+        detail = detail_resp.json()
+        assert len(detail["virtual_data"]) == 3
+        assert len(detail["real_data"]) == 10
+        assert len(detail["personality_analysis"]) == 7
+        assert len(detail["charges"]) == 15
+        assert len(detail["groups"]) == 3
+        assert len(detail["messages"]) == 500
+
+        # Check specific charge and group details from 890046190_8b7aba55.html
+        first_charge = detail["charges"][0]
+        assert "توهین به مقدسات" in first_charge["title"]
+        assert first_charge["count"] == 19
+        assert len(first_charge["evidences"]) == 19
+
+        group_names = [g["name"] for g in detail["groups"]]
+        assert "وفاداران به ملی گرایان مردم گرا" in group_names
+        assert "حزب نافرمانی مدنی ایران" in group_names
+
+        # 3. Verify standalone HTML export matches the 6-tab template structure
+        html_resp = client.get(f"/api/v1/user-reports/{ashouri['id']}/export-html")
+        assert html_resp.status_code == 200
+        html_text = html_resp.text
+        assert "گزارش کاربر: علی اکبر آشوری" in html_text
+        assert "🌐 دیتای فضای مجازی" in html_text
+        assert "👤 دیتای حقیقی" in html_text
+        assert "🧠 تحلیل شخصیت" in html_text
+        assert "⚖️ عناوین اتهامی (15)" in html_text
+        assert "👥 گروه‌های کاربر (3)" in html_text
+        assert "💬 پیام‌های کاربر (500)" in html_text
+
+        # 4. Verify Persian Word (.docx) export of the 6-tab user report
+        word_resp = client.get(f"/api/v1/user-reports/{ashouri['id']}/export-word")
+        assert word_resp.status_code == 200
+        doc = docx.Document(io.BytesIO(word_resp.content))
+        doc_txt = "\n".join(p.text for p in doc.paragraphs) + "\n" + "\n".join(
+            cell.text for t in doc.tables for r in t.rows for cell in r.cells
+        )
+        assert "علی اکبر آشوری" in doc_txt
+        assert "mostafa_" in doc_txt
+        assert "۸۹۰۰۴۶۱۹۰" in doc_txt or "890046190" in doc_txt
+        assert "توهین به مقدسات" in doc_txt

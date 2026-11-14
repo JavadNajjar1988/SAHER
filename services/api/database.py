@@ -330,9 +330,45 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_identity_profiles_mobile ON identity_profiles(mobile_phone);")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_identity_profiles_handle ON identity_profiles(account_handle);")
 
+        # 13. Comprehensive 6-Tab User Activity Reports table (گزارش جامع کاربر)
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS user_activity_reports (
+            id TEXT PRIMARY KEY,
+            archive_id TEXT NOT NULL DEFAULT 'default',
+            full_name TEXT NOT NULL DEFAULT '',
+            username TEXT NOT NULL DEFAULT '',
+            telegram_id TEXT NOT NULL DEFAULT '',
+            national_id TEXT NOT NULL DEFAULT '',
+            phone_number TEXT NOT NULL DEFAULT '',
+            birth_date TEXT NOT NULL DEFAULT '',
+            gender TEXT NOT NULL DEFAULT '',
+            postal_code TEXT NOT NULL DEFAULT '',
+            city TEXT NOT NULL DEFAULT '',
+            province TEXT NOT NULL DEFAULT '',
+            final_status TEXT NOT NULL DEFAULT 'سیاه',
+            header_subtitle TEXT NOT NULL DEFAULT '',
+            virtual_data_json TEXT NOT NULL DEFAULT '[]',
+            real_data_json TEXT NOT NULL DEFAULT '[]',
+            personality_analysis_json TEXT NOT NULL DEFAULT '[]',
+            charges_json TEXT NOT NULL DEFAULT '[]',
+            groups_json TEXT NOT NULL DEFAULT '[]',
+            messages_json TEXT NOT NULL DEFAULT '[]',
+            total_charges INTEGER NOT NULL DEFAULT 0,
+            total_groups INTEGER NOT NULL DEFAULT 0,
+            total_messages INTEGER NOT NULL DEFAULT 0,
+            source_filename TEXT NOT NULL DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_user_reports_nid ON user_activity_reports(national_id);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_user_reports_username ON user_activity_reports(username);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_user_reports_tgid ON user_activity_reports(telegram_id);")
+
         _record_schema_migration(conn, "002_milestone_2_durable_jobs", "Durable jobs, job_events, worker_registry, and migration_audit_log tables")
         _record_schema_migration(conn, "003_milestone_3_ocr_and_pages_fts", "Page-level OCR text, bounding boxes, page error tracking, and pages_fts virtual table")
         _record_schema_migration(conn, "004_identity_profiles_and_judicial_analysis", "Personal and civil identity profiles table with phone, address, and judicial notes")
+        _record_schema_migration(conn, "005_user_activity_reports", "Comprehensive 6-tab user activity reports table (virtual, real, personality analysis, charges, groups, messages)")
 
     if close_after:
         conn.close()

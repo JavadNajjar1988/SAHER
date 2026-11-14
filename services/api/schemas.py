@@ -478,4 +478,107 @@ class IdentityProfileWordExportRequestDTO(BaseModel):
     report_title: Optional[str] = "گزارش جامع مشخصات انفرادی، شناسنامه‌ای، شماره موبایل و آدرس"
 
 
+class UserReportKeyValueDTO(BaseModel):
+    label: str
+    value: str
+
+
+class UserReportAnalysisSectionDTO(BaseModel):
+    title: str
+    content: str
+
+
+class UserReportEvidenceDTO(BaseModel):
+    meta: str = ""
+    doc_id: str = ""
+    offset: str = ""
+    date: str = ""
+    source: str = ""
+    content: str = ""
+
+
+class UserReportChargeDTO(BaseModel):
+    title: str
+    count: int = 0
+    evidences: List[UserReportEvidenceDTO] = Field(default_factory=list)
+
+
+class UserReportGroupDTO(BaseModel):
+    name: str
+    message_count: int = 0
+    count_label: str = ""
+
+
+class UserReportMessageDTO(BaseModel):
+    meta: str = ""
+    date: str = ""
+    source: str = ""
+    doc_id: str = ""
+    content: str = ""
+
+
+class UserReportSummaryDTO(BaseModel):
+    id: str
+    full_name: str = ""
+    username: str = ""
+    telegram_id: str = ""
+    national_id: str = ""
+    phone_number: str = ""
+    city: str = ""
+    province: str = ""
+    final_status: str = "سیاه"
+    header_subtitle: str = ""
+    total_charges: int = 0
+    total_groups: int = 0
+    total_messages: int = 0
+    source_filename: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class UserReportDetailDTO(UserReportSummaryDTO):
+    birth_date: str = ""
+    gender: str = ""
+    postal_code: str = ""
+    virtual_data: List[UserReportKeyValueDTO] = Field(default_factory=list)
+    real_data: List[UserReportKeyValueDTO] = Field(default_factory=list)
+    personality_analysis: List[UserReportAnalysisSectionDTO] = Field(default_factory=list)
+    charges: List[UserReportChargeDTO] = Field(default_factory=list)
+    groups: List[UserReportGroupDTO] = Field(default_factory=list)
+    messages: List[UserReportMessageDTO] = Field(default_factory=list)
+
+
+class UserReportCreateDTO(BaseModel):
+    full_name: str = ""
+    username: str = ""
+    telegram_id: str = ""
+    national_id: str = ""
+    phone_number: str = ""
+    birth_date: str = ""
+    gender: str = "مرد"
+    postal_code: str = ""
+    city: str = "کاشمر"
+    province: str = "خراسان رضوی"
+    final_status: str = "سیاه"
+    activity_type: str = ""
+    behavior_desc: str = ""
+    network_desc: str = ""
+    interests_desc: str = ""
+    key_points: str = ""
+    final_reason: str = ""
+    default_group: str = "گروه رصد فضای مجازی"
+    raw_messages_text: str = ""
+    virtual_data: Optional[List[Dict[str, str]]] = None
+    real_data: Optional[List[Dict[str, str]]] = None
+    personality_analysis: Optional[List[Dict[str, str]]] = None
+    charges: Optional[List[Dict[str, Any]]] = None
+    groups: Optional[List[Dict[str, Any]]] = None
+    messages: Optional[List[Dict[str, Any]]] = None
+
+
+class UserReportListResponseDTO(BaseModel):
+    total: int
+    items: List[UserReportSummaryDTO] = Field(default_factory=list)
+
+
 

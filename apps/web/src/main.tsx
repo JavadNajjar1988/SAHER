@@ -26,6 +26,7 @@ import { ImportDialog } from "./components/ImportDialog";
 import { ProcessingQueueView } from "./components/ProcessingQueueView";
 import { BatchImageAnalysisView } from "./components/BatchImageAnalysisView";
 import { IdentityProfilesView } from "./components/IdentityProfilesView";
+import { UserReportView } from "./components/UserReportView";
 
 const PERSIAN_DIGITS = ["۰", "۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹"];
 const digits = (value: number | string) => {
@@ -514,10 +515,23 @@ function App() {
                     ? "تحلیل خودکار موضوع و ماهیت هر تصویر در پوشه به همراه استخراج متن آفلاین (OCR)، بررسی حقوقی و قضایی و تولید گزارش Word (.docx)"
                     : page === "مشخصات انفرادی و شناسنامه‌ای"
                       ? "پروندهٔ جامع مشخصات فردی، شناسنامه‌ای، شماره موبایل، تلفن ثابت، نشانی پستی، آیدی فضای مجازی و سوابق قضایی به همراه خروجی Word (.docx)"
-                      : "اینجا جایی برای نگه‌داشتن، پیدا کردن و دوباره کشف کردن است."}
+                      : page === "گزارش جامع کاربر"
+                        ? "گزارش جامع ۶ تب کاربر شامل دیتای فضای مجازی، دیتای حقیقی، تحلیل شخصیت، عناوین اتهامی (با صفحه‌بندی شواهد)، گروه‌ها و پیام‌ها به همراه خروجی HTML و Word (.docx)"
+                        : "اینجا جایی برای نگه‌داشتن، پیدا کردن و دوباره کشف کردن است."}
               </p>
             </div>
             <div className="heading-actions">
+              {page !== "گزارش جامع کاربر" && (
+                <button
+                  type="button"
+                  className="secondary-header-btn"
+                  data-testid="open-user-reports-btn"
+                  disabled={connectionMode !== "connected"}
+                  onClick={() => setPage("گزارش جامع کاربر")}
+                >
+                  <span>📊</span> گزارش جامع کاربر
+                </button>
+              )}
               {page !== "مشخصات انفرادی و شناسنامه‌ای" && (
                 <button
                   type="button"
@@ -566,6 +580,10 @@ function App() {
             />
           ) : page === "مشخصات انفرادی و شناسنامه‌ای" ? (
             <IdentityProfilesView
+              digits={digits}
+            />
+          ) : page === "گزارش جامع کاربر" ? (
+            <UserReportView
               digits={digits}
             />
           ) : page === "صف پردازش" || page === "منابع" ? (
