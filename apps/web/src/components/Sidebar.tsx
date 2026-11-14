@@ -15,6 +15,7 @@ interface SidebarProps {
 const nav = [
   "کتابخانه",
   "تحلیل پوشهٔ عکس‌ها",
+  "مشخصات انفرادی و شناسنامه‌ای",
   "جست‌وجو",
   "دسته‌بندی‌ها",
   "صف پردازش",
@@ -43,12 +44,12 @@ export function Sidebar({
 
   const statusSubtext =
     connectionMode === "connected"
-      ? `پایگاه‌داده SQLite + FTS5 فعال${backendVersion ? ` · v${backendVersion}` : ""}`
+      ? `پایگاه‌دادهٔ محلی و جست‌وجوی سریع فعال${backendVersion ? ` · نگارش ${digits(Number(backendVersion.replace(/\D/g, "")) || 3)}` : ""}`
       : connectionMode === "disconnected"
-        ? "سرویس بک‌اند FastAPI در دسترس نیست"
+        ? "سرویس محلی ساهر در دسترس نیست"
         : connectionMode === "demo"
           ? "داده‌های نمایشی بدون ذخیره‌سازی دیسک"
-          : "بررسی ارتباط با بک‌اند…";
+          : "بررسی ارتباط با سرویس محلی…";
 
   const dotClass =
     connectionMode === "connected"
@@ -92,7 +93,7 @@ export function Sidebar({
             }}
           >
             <span className="navicon">
-              {["▦", "▤", "⌕", "◇", "≋", "☑", "▱"][index]}
+              {["▦", "▤", "🪪", "⌕", "◇", "≋", "☑", "▱"][index] || "◇"}
             </span>
             <span>{name}</span>
             {name === "بازبینی" && <b>{digits(attentionCount)}</b>}

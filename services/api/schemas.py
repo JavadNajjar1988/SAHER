@@ -47,6 +47,12 @@ class OCREngineStatusDTO(BaseModel):
     offline_ready: bool = False
     error_code: Optional[str] = None
     error_message: Optional[str] = None
+    available_engines: List[Dict[str, Any]] = Field(default_factory=list)
+    paddleocr_metadata: Optional[Dict[str, Any]] = None
+
+
+class OCREngineSwitchDTO(BaseModel):
+    engine_name: str = Field(..., pattern="^(paddleocr|hybrid|tesseract)$")
 
 
 class FileItemDTO(BaseModel):
@@ -291,6 +297,45 @@ class CulturalSocialTemplateFieldsDTO(BaseModel):
     social_template_text: str = ""
 
 
+class PersonalIdentityDTO(BaseModel):
+    has_identity_data: bool = False
+    first_name: str = ""
+    last_name: str = ""
+    full_name: str = ""
+    father_name: str = ""
+    national_id: str = ""
+    birth_certificate_no: str = ""
+    birth_date: str = ""
+    birth_place: str = ""
+    occupation: str = ""
+    mobile_phone: str = ""
+    secondary_mobile: str = ""
+    landline_phone: str = ""
+    province: str = ""
+    city: str = ""
+    address: str = ""
+    postal_code: str = ""
+    location_name: str = ""
+    gps_coordinates: str = ""
+    account_handle: str = ""
+    account_label: str = ""
+    numeric_id: str = ""
+    profile_url: str = ""
+    personal_folder: str = ""
+    thematic_category: str = "اجتماعی"
+
+
+class CriminalAssessmentDTO(BaseModel):
+    has_criminal_indicator: bool = False
+    risk_level: str = "عادی (فاقد مصداق مجرمانهٔ آشکار در عنوان و متن)"
+    criminal_charges: List[str] = Field(default_factory=list)
+    legal_articles: List[str] = Field(default_factory=list)
+    evidence_quotes: List[str] = Field(default_factory=list)
+    exact_text_inspection: str = ""
+    judicial_summary: str = ""
+    recommended_action: str = ""
+
+
 class ImageAnalysisItemDTO(BaseModel):
     file_id: str
     title: str
@@ -300,7 +345,7 @@ class ImageAnalysisItemDTO(BaseModel):
     width: int = 0
     height: int = 0
     aspect_ratio: float = 1.0
-    orientation: str = "افقی (Landscape)"
+    orientation: str = "افقی"
     color_mode: str = "RGB"
     dominant_color_hex: str = "#F5F3EE"
     color_profile_label: str = "زمینهٔ روشن کاغذی"
@@ -313,11 +358,19 @@ class ImageAnalysisItemDTO(BaseModel):
     line_count: int = 0
     bbox_count: int = 0
     ocr_confidence: Optional[float] = None
+    ocr_engine: str = "paddleocr"
     extracted_text: str = ""
+    personal_folder: str = "پوشهٔ عمومی آرشیو"
     account_id: str = ""
     account_username: str = ""
     account_label: str = "بدون نام کاربری / آیدی مشخص"
     platform_source: str = "اسکرین‌شات / تصویر عمومی"
+    capture_source_category: str = "اسکرین‌شات موبایل / شبکهٔ اجتماعی"
+    subject_classification: str = "پست یا استوری شبکهٔ اجتماعی"
+    camera_info: str = "بدون فرادادهٔ دوربین"
+    location_name: str = "موقعیت مکانی ثبت‌نشده"
+    gps_coordinates: str = ""
+    detected_caption: str = ""
     thematic_category: str = "اجتماعی"
     image_nature: str = "سند یا برگهٔ متنی اسکن‌شده"
     detected_topic: str = "اجتماعی"
@@ -325,6 +378,8 @@ class ImageAnalysisItemDTO(BaseModel):
     tags: List[str] = Field(default_factory=list)
     key_findings: List[str] = Field(default_factory=list)
     analysis_summary: str = ""
+    personal_identity: PersonalIdentityDTO = Field(default_factory=PersonalIdentityDTO)
+    criminal_assessment: CriminalAssessmentDTO = Field(default_factory=CriminalAssessmentDTO)
     template_applicable: bool = False
     template_fields: Optional[CulturalSocialTemplateFieldsDTO] = None
     formatted_template_text: str = ""
@@ -333,10 +388,14 @@ class ImageAnalysisItemDTO(BaseModel):
 class FolderAnalysisResponseDTO(BaseModel):
     folder_name: str
     total_images: int
+    ocr_engine: str = "paddleocr"
     account_breakdown: Dict[str, int] = Field(default_factory=dict)
     account_category_tree: Dict[str, Dict[str, int]] = Field(default_factory=dict)
     topic_breakdown: Dict[str, int] = Field(default_factory=dict)
     nature_breakdown: Dict[str, int] = Field(default_factory=dict)
+    source_type_breakdown: Dict[str, int] = Field(default_factory=dict)
+    location_breakdown: Dict[str, int] = Field(default_factory=dict)
+    criminal_count: int = 0
     items: List[ImageAnalysisItemDTO] = Field(default_factory=list)
 
 
@@ -344,7 +403,79 @@ class ImageWordExportRequestDTO(BaseModel):
     file_ids: List[str] = Field(..., min_length=1, max_length=200)
     folder_name: Optional[str] = Field(default="پوشهٔ تصاویر انتخابی", max_length=200)
     source_url: Optional[str] = Field(default=None, max_length=500)
+    ocr_engine: Optional[str] = Field(default=None, max_length=64)
     template_overrides_by_file: Optional[Dict[str, Dict[str, Any]]] = None
+
+
+class IdentityProfileItemDTO(BaseModel):
+    id: str
+    source_file_id: Optional[str] = None
+    first_name: str = ""
+    last_name: str = ""
+    full_name: str = ""
+    father_name: str = ""
+    national_id: str = ""
+    birth_certificate_no: str = ""
+    birth_date: str = ""
+    birth_place: str = ""
+    occupation: str = ""
+    mobile_phone: str = ""
+    secondary_mobile: str = ""
+    landline_phone: str = ""
+    province: str = ""
+    city: str = ""
+    address: str = ""
+    postal_code: str = ""
+    gps_coordinates: str = ""
+    location_name: str = ""
+    account_handle: str = ""
+    numeric_id: str = ""
+    profile_url: str = ""
+    personal_folder: str = ""
+    thematic_category: str = "اجتماعی"
+    risk_level: str = "عادی"
+    judicial_notes: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class IdentityProfileUpsertDTO(BaseModel):
+    source_file_id: Optional[str] = None
+    first_name: str = ""
+    last_name: str = ""
+    full_name: str = ""
+    father_name: str = ""
+    national_id: str = ""
+    birth_certificate_no: str = ""
+    birth_date: str = ""
+    birth_place: str = ""
+    occupation: str = ""
+    mobile_phone: str = ""
+    secondary_mobile: str = ""
+    landline_phone: str = ""
+    province: str = ""
+    city: str = ""
+    address: str = ""
+    postal_code: str = ""
+    gps_coordinates: str = ""
+    location_name: str = ""
+    account_handle: str = ""
+    numeric_id: str = ""
+    profile_url: str = ""
+    personal_folder: str = ""
+    thematic_category: str = "اجتماعی"
+    risk_level: str = "عادی"
+    judicial_notes: str = ""
+
+
+class IdentityProfileListResponseDTO(BaseModel):
+    total: int
+    items: List[IdentityProfileItemDTO] = Field(default_factory=list)
+
+
+class IdentityProfileWordExportRequestDTO(BaseModel):
+    profile_ids: Optional[List[str]] = None
+    report_title: Optional[str] = "گزارش جامع مشخصات انفرادی، شناسنامه‌ای، شماره موبایل و آدرس"
 
 
 

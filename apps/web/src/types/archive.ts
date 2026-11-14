@@ -58,9 +58,30 @@ export interface PageItem {
   updated_at?: string | null;
 }
 
+export type OCREngineId = "paddleocr" | "hybrid" | "tesseract" | string;
+
+export interface OCREngineOption {
+  id: OCREngineId;
+  title: string;
+  description: string;
+  ready: boolean;
+}
+
+export interface PaddleOCRMetadata {
+  repo_present: boolean;
+  repo_url: string;
+  repo_dir: string;
+  dict_dir: string;
+  has_configs: boolean;
+  dictionaries_loaded: Record<string, number>;
+  total_charset_size: number;
+  supported_scripts: string[];
+  pipeline_stages: string[];
+}
+
 export interface OCREngineStatus {
   ready: boolean;
-  engine_name: string;
+  engine_name: OCREngineId;
   engine_version: string;
   model_dir: string;
   installed_languages: string[];
@@ -69,6 +90,8 @@ export interface OCREngineStatus {
   offline_ready: boolean;
   error_code?: string | null;
   error_message?: string | null;
+  available_engines?: OCREngineOption[];
+  paddleocr_metadata?: PaddleOCRMetadata | null;
 }
 
 export interface FileItem {
@@ -282,6 +305,45 @@ export interface CulturalSocialTemplateFields {
   social_template_text?: string;
 }
 
+export interface PersonalIdentityFields {
+  has_identity_data?: boolean;
+  first_name?: string;
+  last_name?: string;
+  full_name?: string;
+  father_name?: string;
+  national_id?: string;
+  birth_certificate_no?: string;
+  birth_date?: string;
+  birth_place?: string;
+  occupation?: string;
+  mobile_phone?: string;
+  secondary_mobile?: string;
+  landline_phone?: string;
+  province?: string;
+  city?: string;
+  address?: string;
+  postal_code?: string;
+  location_name?: string;
+  gps_coordinates?: string;
+  account_handle?: string;
+  account_label?: string;
+  numeric_id?: string;
+  profile_url?: string;
+  personal_folder?: string;
+  thematic_category?: string;
+}
+
+export interface CriminalAssessment {
+  has_criminal_indicator: boolean;
+  risk_level: string;
+  criminal_charges: string[];
+  legal_articles: string[];
+  evidence_quotes: string[];
+  exact_text_inspection: string;
+  judicial_summary: string;
+  recommended_action: string;
+}
+
 export interface ImageAnalysisItem {
   file_id: string;
   title: string;
@@ -304,11 +366,19 @@ export interface ImageAnalysisItem {
   line_count: number;
   bbox_count: number;
   ocr_confidence?: number | null;
+  ocr_engine?: string;
   extracted_text: string;
+  personal_folder?: string;
   account_id?: string;
   account_username?: string;
   account_label?: string;
   platform_source?: string;
+  capture_source_category?: string;
+  subject_classification?: string;
+  camera_info?: string;
+  location_name?: string;
+  gps_coordinates?: string;
+  detected_caption?: string;
   thematic_category?: string;
   image_nature: string;
   detected_topic: string;
@@ -316,6 +386,8 @@ export interface ImageAnalysisItem {
   tags: string[];
   key_findings: string[];
   analysis_summary: string;
+  personal_identity?: PersonalIdentityFields | null;
+  criminal_assessment?: CriminalAssessment | null;
   template_applicable?: boolean;
   template_fields?: CulturalSocialTemplateFields | null;
   formatted_template_text?: string;
@@ -324,10 +396,51 @@ export interface ImageAnalysisItem {
 export interface FolderAnalysisResponse {
   folder_name: string;
   total_images: number;
+  ocr_engine?: string;
   account_breakdown?: Record<string, number>;
   account_category_tree?: Record<string, Record<string, number>>;
   topic_breakdown: Record<string, number>;
   nature_breakdown: Record<string, number>;
+  source_type_breakdown?: Record<string, number>;
+  location_breakdown?: Record<string, number>;
+  criminal_count?: number;
   items: ImageAnalysisItem[];
+}
+
+export interface IdentityProfileItem {
+  id: string;
+  source_file_id?: string | null;
+  first_name: string;
+  last_name: string;
+  full_name: string;
+  father_name: string;
+  national_id: string;
+  birth_certificate_no: string;
+  birth_date: string;
+  birth_place: string;
+  occupation: string;
+  mobile_phone: string;
+  secondary_mobile: string;
+  landline_phone: string;
+  province: string;
+  city: string;
+  address: string;
+  postal_code: string;
+  gps_coordinates: string;
+  location_name: string;
+  account_handle: string;
+  numeric_id: string;
+  profile_url: string;
+  personal_folder: string;
+  thematic_category: string;
+  risk_level: string;
+  judicial_notes: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface IdentityProfileListResponse {
+  total: number;
+  items: IdentityProfileItem[];
 }
 

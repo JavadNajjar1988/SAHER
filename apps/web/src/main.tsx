@@ -25,8 +25,15 @@ import { FileDetailModal } from "./components/FileDetailModal";
 import { ImportDialog } from "./components/ImportDialog";
 import { ProcessingQueueView } from "./components/ProcessingQueueView";
 import { BatchImageAnalysisView } from "./components/BatchImageAnalysisView";
+import { IdentityProfilesView } from "./components/IdentityProfilesView";
 
-const digits = (value: number) => value.toLocaleString("fa-IR");
+const PERSIAN_DIGITS = ["۰", "۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹"];
+const digits = (value: number | string) => {
+  if (typeof value === "number") {
+    return value.toLocaleString("fa-IR");
+  }
+  return String(value ?? "").replace(/\d/g, (d) => PERSIAN_DIGITS[Number(d)] ?? d);
+};
 
 const DEMO_JOBS: JobItem[] = [
   {
@@ -504,11 +511,24 @@ function App() {
                 {page === "صف پردازش" || page === "منابع"
                   ? "پایش زندهٔ کارهای پردازشی پایدار، مراحل استخراج متن، وضعیت کارگرهای پس‌زمینه و مدیریت منابع"
                   : page === "تحلیل پوشهٔ عکس‌ها"
-                    ? "تحلیل خودکار موضوع و ماهیت هر تصویر در پوشه به همراه استخراج متن آفلاین (OCR) و تولید گزارش Word (.docx)"
-                    : "اینجا جایی برای نگه‌داشتن، پیدا کردن و دوباره کشف کردن است."}
+                    ? "تحلیل خودکار موضوع و ماهیت هر تصویر در پوشه به همراه استخراج متن آفلاین (OCR)، بررسی حقوقی و قضایی و تولید گزارش Word (.docx)"
+                    : page === "مشخصات انفرادی و شناسنامه‌ای"
+                      ? "پروندهٔ جامع مشخصات فردی، شناسنامه‌ای، شماره موبایل، تلفن ثابت، نشانی پستی، آیدی فضای مجازی و سوابق قضایی به همراه خروجی Word (.docx)"
+                      : "اینجا جایی برای نگه‌داشتن، پیدا کردن و دوباره کشف کردن است."}
               </p>
             </div>
             <div className="heading-actions">
+              {page !== "مشخصات انفرادی و شناسنامه‌ای" && (
+                <button
+                  type="button"
+                  className="secondary-header-btn"
+                  data-testid="open-identity-profiles-btn"
+                  disabled={connectionMode !== "connected"}
+                  onClick={() => setPage("مشخصات انفرادی و شناسنامه‌ای")}
+                >
+                  <span>🪪</span> مشخصات انفرادی و شناسنامه‌ای
+                </button>
+              )}
               {page !== "تحلیل پوشهٔ عکس‌ها" && (
                 <button
                   type="button"
@@ -525,7 +545,7 @@ function App() {
                 disabled={connectionMode !== "connected"}
                 title={
                   connectionMode !== "connected"
-                    ? "واردسازی فایل فقط در حالت متصل به سرویس محلی FastAPI امکان‌پذیر است"
+                    ? "واردسازی فایل فقط در حالت متصل به سرویس محلی امکان‌پذیر است"
                     : "افزودن فایل جدید به آرشیو محلی"
                 }
                 onClick={() => setAdding(true)}
@@ -541,6 +561,11 @@ function App() {
               archiveFiles={items}
               onRefreshArchive={loadFromBackend}
               onOpenFileById={handleOpenFileById}
+              onOpenIdentityProfiles={() => setPage("مشخصات انفرادی و شناسنامه‌ای")}
+              digits={digits}
+            />
+          ) : page === "مشخصات انفرادی و شناسنامه‌ای" ? (
+            <IdentityProfilesView
               digits={digits}
             />
           ) : page === "صف پردازش" || page === "منابع" ? (
@@ -597,7 +622,7 @@ function App() {
                 </div>
               </section>
 
-              {["کتابخانه", "جست‌وجو", "بازبینی"].includes(page) ? (
+              {["کتابخانه", "جست‌وجو", "بازبینی", "دسته‌بندی‌ها"].includes(page) ? (
                 <>
                   <section className="toolbar">
                     <div className="search">

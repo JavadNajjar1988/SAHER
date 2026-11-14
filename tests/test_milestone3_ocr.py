@@ -78,7 +78,8 @@ def _render_persian_page_image(lines: list[str], width: int = 1000, height: int 
     """Render clean Persian/English text onto a white PIL image using Vazirmatn.ttf.
     Pillow's libraqm layout engine handles Persian glyph shaping and BiDi ordering natively.
     """
-    img = Image.new("RGB", (width, height), color=(255, 255, 255))
+    actual_height = max(height, 96 + len(lines) * 76)
+    img = Image.new("RGB", (width, actual_height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
     font = ImageFont.truetype(str(FONT_PATH), 34)
     y = 48
@@ -812,3 +813,192 @@ def test_m3_cultural_and_social_instagram_template_completion_and_word_export():
         assert "✅ آیدی عددی: 583920147" in doc_text
         assert "@mira_rjbpr" in doc_text
         assert "#کاشمر" in doc_text
+
+
+def test_m3_paddleocr_engine_integration_and_dark_mode_screenshot():
+    """Verify:
+    1. `PaddlePaddle/PaddleOCR` repository (`vendor/PaddleOCR`) and its Persian (`fa_dict.txt`),
+       Arabic (`ppocrv5_arabic_dict.txt`), and English (`en_dict.txt`) dictionaries are loaded.
+    2. `POST /api/v1/ocr/engine` switches between `paddleocr`, `hybrid`, and `tesseract`.
+    3. `PaddleOCREngine` accurately extracts Persian/English text and `@handle` from a dark-mode
+       social media screenshot (white text on dark #14171A background) via PP-OCR auto-inversion.
+    """
+    from services.ocr import PaddleOCREngine, get_paddleocr_repo_metadata, set_ocr_engine
+
+    meta = get_paddleocr_repo_metadata()
+    assert meta["repo_present"] is True
+    assert "fa_dict.txt" in meta["dictionaries_loaded"]
+    assert meta["dictionaries_loaded"]["fa_dict.txt"] > 100
+    assert meta["total_charset_size"] > 120
+
+    # Render a dark-mode Instagram/Telegram screenshot (light text on dark #14171A background)
+    dark_img = Image.new("RGB", (1000, 420), color=(20, 23, 26))
+    draw = ImageDraw.Draw(dark_img)
+    font = ImageFont.truetype(str(FONT_PATH), 34)
+    y = 48
+    for line in [
+        "نام کاربری: @paddle_cyber_ir",
+        "هشدار امنیتی و تحلیل بدافزار سایبری در شبکه",
+        "کدملی: 0931122334",
+    ]:
+        draw.text((60, y), line, font=font, fill=(242, 245, 248))
+        y += 76
+
+    paddle_engine = PaddleOCREngine(hybrid_mode=False)
+    st = paddle_engine.inspect_status()
+    assert st.ready is True
+    assert st.engine_name == "paddleocr"
+    assert "fa_ppocr" in st.installed_languages
+
+    res = paddle_engine.recognize_image(dark_img, page_number=1)
+    assert res.status == "extracted"
+    assert res.engine_name == "paddleocr"
+    assert "paddle_cyber_ir" in res.normalized_text or "سایبری" in res.normalized_text
+    assert "0931122334" in res.normalized_text
+
+    with TestClient(app) as client:
+        # Switch engine via API to paddleocr
+        sw_resp = client.post("/api/v1/ocr/engine", json={"engine_name": "paddleocr"})
+        assert sw_resp.status_code == 200
+        sw_data = sw_resp.json()
+        assert sw_data["engine_name"] == "paddleocr"
+        assert sw_data["ready"] is True
+        assert sw_data["paddleocr_metadata"]["repo_present"] is True
+        assert len(sw_data["available_engines"]) == 3
+
+        # Switch back to tesseract and verify
+        sw_tess = client.post("/api/v1/ocr/engine", json={"engine_name": "tesseract"})
+        assert sw_tess.status_code == 200
+        assert sw_tess.json()["engine_name"] == "tesseract"
+        set_ocr_engine(None)
+
+
+def test_m3_multi_axis_classification_judicial_and_identity_profiles():
+    """Verify all 7 newly requested capabilities:
+    1. Capture source classification (اسکرین‌شات موبایل، عکس با دوربین، عکس سوژه و ...)
+    2. Subject ID, location name, and GPS coordinates (`35.2384, 58.4656`)
+    3. Exact title & written text analysis + Legal/Judicial criminal assessment (`criminal_assessment`)
+    4. Personal folder -> 12 thematic categories classification (`جاسوسی`, `فرهنگی`, etc.)
+    5. Personal & Civil Identity Dossiers CRUD + auto-sync + Word (.docx) export (`/api/v1/profiles`)
+    """
+    import json
+    import docx
+
+    # Image 1: Espionage / Classified Document with coordinates & identity info
+    pil_espionage = _render_persian_page_image([
+        "آیدی: @spy_network_ir",
+        "نام و نام خانوادگی: بهرام کاظمی",
+        "نام پدر: منصور",
+        "کدملی: 0945566778",
+        "شماره شناسنامه: 4512",
+        "شماره موبایل: 09159998877",
+        "تلفن ثابت: 05155223344",
+        "آدرس: خراسان رضوی، کاشمر، خیابان امام خمینی، پلاک ۱۲",
+        "مختصات: 35.2384, 58.4656",
+        "افشای اسناد فوق محرمانه و جاسوسی برای سرویس بیگانه",
+    ])
+    b_esp = io.BytesIO()
+    pil_espionage.save(b_esp, format="PNG")
+
+    # Image 2: Camera photo of drone/military site (filename IMG_2045_camera.png)
+    pil_cam = _render_persian_page_image([
+        "عکسبرداری با دوربین از آشیانه پهپاد شاهد و سایت راداری مرزی",
+        "موقعیت مکانی: استان خراسان رضوی شهرستان کاشمر",
+    ])
+    b_cam = io.BytesIO()
+    pil_cam.save(b_cam, format="PNG")
+
+    with TestClient(app) as client:
+        rel_paths = json.dumps([
+            "پوشه_بهرام_کاظمی/@spy_network_ir/classified_doc_01.png",
+            "عکاسی_میدانی/IMG_2045_camera.png",
+        ])
+        resp = client.post(
+            "/api/v1/images/analyze-folder",
+            files=[
+                ("files", ("classified_doc_01.png", b_esp.getvalue(), "image/png")),
+                ("files", ("IMG_2045_camera.png", b_cam.getvalue(), "image/png")),
+            ],
+            data={
+                "folder_name": "پرونده چندبعدی قضایی و هویتی",
+                "relative_paths": rel_paths,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["total_images"] == 2
+        assert data["criminal_count"] >= 1
+        assert "source_type_breakdown" in data
+        assert "location_breakdown" in data
+
+        it1, it2 = data["items"][0], data["items"][1]
+        # Verify Personal Folder & 12-category classification
+        assert "پوشهٔ شخصی" in it1["personal_folder"]
+        assert it1["thematic_category"] == "جاسوسی"
+        assert "35.2384, 58.4656" in it1["gps_coordinates"]
+        assert "کاشمر" in it1["location_name"]
+
+        # Verify Criminal & Judicial Assessment
+        crim1 = it1["criminal_assessment"]
+        assert crim1["has_criminal_indicator"] is True
+        assert "بحرانی" in crim1["risk_level"]
+        assert any("۵۰۱" in art or "جاسوسی" in art for art in crim1["legal_articles"] + crim1["criminal_charges"])
+
+        # Verify Personal Identity extraction
+        pid1 = it1["personal_identity"]
+        assert pid1["has_identity_data"] is True
+        assert pid1["national_id"] == "0945566778"
+        assert pid1["mobile_phone"] == "09159998877"
+
+        # Verify Camera Photo source classification on Image 2
+        assert "دوربین" in it2["capture_source_category"]
+
+        # Verify Identity Profiles API auto-synced the extracted dossier
+        prof_list = client.get("/api/v1/profiles")
+        assert prof_list.status_code == 200
+        profs = prof_list.json()["items"]
+        assert any(p["national_id"] == "0945566778" and p["mobile_phone"] == "09159998877" for p in profs)
+
+        # Create a new manual identity profile via POST /api/v1/profiles
+        create_resp = client.post(
+            "/api/v1/profiles",
+            json={
+                "first_name": "سارا",
+                "last_name": "احمدی",
+                "full_name": "سارا احمدی",
+                "father_name": "رضا",
+                "national_id": "0912345678",
+                "birth_certificate_no": "1890",
+                "birth_date": "1376/02/15",
+                "birth_place": "مشهد",
+                "occupation": "طراح لباس",
+                "mobile_phone": "09151112233",
+                "landline_phone": "05138889900",
+                "province": "خراسان رضوی",
+                "city": "مشهد",
+                "address": "مشهد، بلوار وکیل‌آباد، پلاک ۴۵",
+                "postal_code": "9188812345",
+                "account_handle": "@sara_design_ir",
+                "thematic_category": "فرهنگی",
+                "judicial_notes": "ماده ۱۴ قانون جرایم رایانه‌ای",
+            },
+        )
+        assert create_resp.status_code == 201
+        created_prof = create_resp.json()
+        assert created_prof["full_name"] == "سارا احمدی"
+
+        # Export Identity Profiles to Persian Word (.docx)
+        word_prof_resp = client.post(
+            "/api/v1/profiles/export-word",
+            json={"profile_ids": [created_prof["id"]]},
+        )
+        assert word_prof_resp.status_code == 200
+        prof_doc = docx.Document(io.BytesIO(word_prof_resp.content))
+        prof_doc_txt = "\n".join(
+            cell.text for t in prof_doc.tables for r in t.rows for cell in r.cells
+        )
+        assert "سارا احمدی" in prof_doc_txt
+        assert "09151112233" in prof_doc_txt
+        assert "بلوار وکیل‌آباد" in prof_doc_txt
+
+

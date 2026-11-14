@@ -55,15 +55,15 @@ const JOB_TYPE_LABELS: Record<string, string> = {
 
 const RESOURCE_MODE_LABELS: Record<ResourceMode, { title: string; desc: string }> = {
   Eco: {
-    title: "کم‌مصرف (Eco)",
+    title: "کم‌مصرف",
     desc: "۱ کارگر هم‌زمان · حداقل مصرف پردازنده",
   },
   Balanced: {
-    title: "متعادل (Balanced)",
+    title: "متعادل",
     desc: "۲ کارگر هم‌زمان · تعادل سرعت و منابع سیستم",
   },
   Performance: {
-    title: "حداکثر توان (Performance)",
+    title: "حداکثر توان",
     desc: "۴ کارگر هم‌زمان · پردازش سریع دسته‌ای",
   },
 };
@@ -130,6 +130,22 @@ export function ProcessingQueueView({
       await onRefresh();
     } catch (err: any) {
       setActionError(err?.message || "خطا در تغییر حالت منابع کارگر.");
+    } finally {
+      setChangingMode(false);
+    }
+  };
+
+  const handleOcrEngineSwitch = async (engineName: string) => {
+    if (!isConnected || changingMode) return;
+    setChangingMode(true);
+    setActionBanner("");
+    setActionError("");
+    try {
+      const updated = await ArchiveApiClient.switchOcrEngine(engineName);
+      setActionBanner(`موتور تشخیص متن آفلاین به «${updated.engine_version}» تغییر یافت.`);
+      await onRefresh();
+    } catch (err: any) {
+      setActionError(err?.message || "خطا در تغییر موتور تشخیص متن (OCR).");
     } finally {
       setChangingMode(false);
     }
@@ -230,20 +246,61 @@ export function ProcessingQueueView({
               )}
             </p>
           )}
+          {ocrStatus?.paddleocr_metadata && (
+            <p className="ocr-engine-meta" data-testid="paddleocr-repo-status-line">
+              مخزن یکپارچه‌شدهٔ <strong>PaddlePaddle/PaddleOCR</strong>:{" "}
+              {ocrStatus.paddleocr_metadata.repo_present ? (
+                <span>
+                  ✓ فعال در <code>vendor/PaddleOCR</code> · واژه‌نامه‌های بارگذاری‌شده:{" "}
+                  <code>fa_dict.txt</code>، <code>ppocrv5_arabic_dict.txt</code>،{" "}
+                  <code>en_dict.txt</code> ({digits(ocrStatus.paddleocr_metadata.total_charset_size)} نویسه)
+                </span>
+              ) : (
+                <span>در انتظار بارگذاری مخزن</span>
+              )}
+            </p>
+          )}
         </div>
-        <div className="resource-mode-group" role="group" aria-label="انتخاب حالت منابع پردازشی">
-          {(["Eco", "Balanced", "Performance"] as ResourceMode[]).map((m) => (
-            <button
-              key={m}
-              type="button"
-              disabled={!isConnected || changingMode}
-              className={resourceMode === m ? "mode-btn active" : "mode-btn"}
-              onClick={() => handleModeSwitch(m)}
-              title={RESOURCE_MODE_LABELS[m].desc}
+        <div className="worker-controls-stack">
+          <div className="resource-mode-group" role="group" aria-label="انتخاب حالت منابع پردازشی">
+            {(["Eco", "Balanced", "Performance"] as ResourceMode[]).map((m) => (
+              <button
+                key={m}
+                type="button"
+                disabled={!isConnected || changingMode}
+                className={resourceMode === m ? "mode-btn active" : "mode-btn"}
+                onClick={() => handleModeSwitch(m)}
+                title={RESOURCE_MODE_LABELS[m].desc}
+              >
+                {RESOURCE_MODE_LABELS[m].title}
+              </button>
+            ))}
+          </div>
+          {ocrStatus && (
+            <div
+              className="resource-mode-group"
+              role="group"
+              aria-label="انتخاب موتور تشخیص متن آفلاین (OCR)"
+              data-testid="ocr-engine-switcher-group"
             >
-              {RESOURCE_MODE_LABELS[m].title}
-            </button>
-          ))}
+              {[
+                { id: "paddleocr", label: "PaddleOCR (PP-OCRv4/v5)" },
+                { id: "hybrid", label: "ترکیبی (PaddleOCR + Tesseract)" },
+                { id: "tesseract", label: "Tesseract 5 LSTM" },
+              ].map((eng) => (
+                <button
+                  key={eng.id}
+                  type="button"
+                  data-testid={`switch-ocr-engine-${eng.id}`}
+                  disabled={!isConnected || changingMode}
+                  className={ocrStatus.engine_name === eng.id ? "mode-btn active" : "mode-btn"}
+                  onClick={() => handleOcrEngineSwitch(eng.id)}
+                >
+                  {eng.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </section>
 

@@ -478,7 +478,10 @@ if (mode === "dev") {
   const pyEnv = getPythonEnv();
   ensureSystemAndPythonDepsSync(pyBin, pyEnv);
   const extraArgs = process.argv.slice(3);
-  const pytestArgs = extraArgs.length > 0 ? extraArgs : ["-v", "tests/"];
+  const pytestArgs =
+    extraArgs.length > 0
+      ? ["-o", "cache_dir=/tmp/pytest_cache", ...extraArgs]
+      : ["-o", "cache_dir=/tmp/pytest_cache", "-v", "tests/"];
   const proc = spawnManaged(
     pyBin,
     ["-m", "pytest", ...pytestArgs],

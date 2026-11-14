@@ -291,8 +291,48 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
         );
         """)
 
+        # 12. Personal & Civil Identity Profiles table (مشخصات انفرادی و شناسنامه‌ای)
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS identity_profiles (
+            id TEXT PRIMARY KEY,
+            archive_id TEXT NOT NULL DEFAULT 'default',
+            source_file_id TEXT,
+            first_name TEXT NOT NULL DEFAULT '',
+            last_name TEXT NOT NULL DEFAULT '',
+            full_name TEXT NOT NULL DEFAULT '',
+            father_name TEXT NOT NULL DEFAULT '',
+            national_id TEXT NOT NULL DEFAULT '',
+            birth_certificate_no TEXT NOT NULL DEFAULT '',
+            birth_date TEXT NOT NULL DEFAULT '',
+            birth_place TEXT NOT NULL DEFAULT '',
+            occupation TEXT NOT NULL DEFAULT '',
+            mobile_phone TEXT NOT NULL DEFAULT '',
+            secondary_mobile TEXT NOT NULL DEFAULT '',
+            landline_phone TEXT NOT NULL DEFAULT '',
+            province TEXT NOT NULL DEFAULT '',
+            city TEXT NOT NULL DEFAULT '',
+            address TEXT NOT NULL DEFAULT '',
+            postal_code TEXT NOT NULL DEFAULT '',
+            gps_coordinates TEXT NOT NULL DEFAULT '',
+            location_name TEXT NOT NULL DEFAULT '',
+            account_handle TEXT NOT NULL DEFAULT '',
+            numeric_id TEXT NOT NULL DEFAULT '',
+            profile_url TEXT NOT NULL DEFAULT '',
+            personal_folder TEXT NOT NULL DEFAULT '',
+            thematic_category TEXT NOT NULL DEFAULT 'اجتماعی',
+            risk_level TEXT NOT NULL DEFAULT 'عادی',
+            judicial_notes TEXT NOT NULL DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_identity_profiles_nid ON identity_profiles(national_id);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_identity_profiles_mobile ON identity_profiles(mobile_phone);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_identity_profiles_handle ON identity_profiles(account_handle);")
+
         _record_schema_migration(conn, "002_milestone_2_durable_jobs", "Durable jobs, job_events, worker_registry, and migration_audit_log tables")
         _record_schema_migration(conn, "003_milestone_3_ocr_and_pages_fts", "Page-level OCR text, bounding boxes, page error tracking, and pages_fts virtual table")
+        _record_schema_migration(conn, "004_identity_profiles_and_judicial_analysis", "Personal and civil identity profiles table with phone, address, and judicial notes")
 
     if close_after:
         conn.close()

@@ -992,12 +992,14 @@ class ArchiveRepository:
         auto_update_metadata: bool = False,
         source_url: str = "",
         template_overrides: Optional[Dict[str, Any]] = None,
+        ocr_engine: Optional[str] = None,
     ):
         """
         Computes a comprehensive visual + textual nature & topic analysis for a stored archive file/image.
         Optionally enriches the file's topic and tags in SQLite when `auto_update_metadata=True`.
         """
         from services.analysis.image_analyzer import analyze_image_nature_and_topic
+        from services.ocr import get_ocr_engine_by_name
 
         file_item = cls.get_file(file_id)
         if not file_item:
@@ -1016,6 +1018,27 @@ class ArchiveRepository:
                 confs.append(float(p.ocr_confidence))
 
         avg_conf = round(sum(confs) / len(confs), 1) if confs else None
+        effective_text = file_item.text or ""
+        effective_engine_name = (ocr_engine or settings.ocr_engine or "paddleocr").strip().lower()
+
+        # When PaddleOCR / Hybrid engine is requested and existing text is empty or low-confidence
+        # (e.g. dark-mode screenshot or unextracted image), run PaddleOCR recognition on the image
+        if (
+            storage_path
+            and os.path.isfile(storage_path)
+            and file_item.mime_type.startswith("image/")
+            and effective_engine_name in ("paddleocr", "hybrid")
+            and (not effective_text.strip() or (avg_conf is not None and avg_conf < 72.0))
+        ):
+            try:
+                engine_adapter = get_ocr_engine_by_name(effective_engine_name)
+                ocr_res = engine_adapter.recognize_image(storage_path, page_number=1)
+                if ocr_res.normalized_text and len(ocr_res.normalized_text) >= len(effective_text.strip()):
+                    effective_text = ocr_res.normalized_text
+                    bboxes_combined = [b.to_dict() for b in ocr_res.bboxes]
+                    avg_conf = round(float(ocr_res.confidence), 1)
+            except Exception:
+                pass
 
         # Preserve any previously saved account identity or URL tags (from folder upload) during subsequent re-analysis / Word export
         effective_rel_path = relative_path or file_item.title
@@ -1034,38 +1057,347 @@ class ArchiveRepository:
             image_path=storage_path,
             mime_type=file_item.mime_type,
             file_size=file_item.file_size,
-            extracted_text=file_item.text or "",
+            extracted_text=effective_text,
             bboxes=bboxes_combined,
             ocr_confidence=avg_conf,
             relative_path=effective_rel_path,
             source_url=effective_source_url,
             template_overrides=template_overrides,
+            ocr_engine=effective_engine_name,
         )
 
-        if auto_update_metadata and not file_item.is_user_modified:
-            merged_tags = list(file_item.tags)
-            for t in result.tags:
-                if t not in merged_tags:
-                    merged_tags.append(t)
-            if effective_source_url:
-                url_tag = f"لینک: {effective_source_url}"
-                if url_tag not in merged_tags:
-                    merged_tags.append(url_tag)
-            with get_db() as conn:
-                conn.execute(
-                    "UPDATE files SET topic = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (result.detected_topic, file_id),
-                )
-                cls.set_file_tags(conn, file_id, merged_tags[:10])
-                cls.update_fts(
-                    conn,
-                    file_id,
-                    file_item.title,
-                    file_item.text or "",
-                    result.detected_topic,
-                    merged_tags[:10],
-                )
+        if auto_update_metadata:
+            if not file_item.is_user_modified:
+                merged_tags = list(file_item.tags)
+                for t in result.tags:
+                    if t not in merged_tags:
+                        merged_tags.append(t)
+                if effective_source_url:
+                    url_tag = f"لینک: {effective_source_url}"
+                    if url_tag not in merged_tags:
+                        merged_tags.append(url_tag)
+                with get_db() as conn:
+                    conn.execute(
+                        "UPDATE files SET topic = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (result.detected_topic, file_id),
+                    )
+                    cls.set_file_tags(conn, file_id, merged_tags[:10])
+                    cls.update_fts(
+                        conn,
+                        file_id,
+                        file_item.title,
+                        effective_text,
+                        result.detected_topic,
+                        merged_tags[:10],
+                    )
+            try:
+                pid = getattr(result, "personal_identity", None) or {}
+                crim = getattr(result, "criminal_assessment", None) or {}
+                if pid.get("has_identity_data"):
+                    cls.sync_single_analysis_to_identity_profile(file_id, pid, crim)
+            except Exception:
+                pass
 
         return result
+
+    @classmethod
+    def sync_single_analysis_to_identity_profile(
+        cls,
+        file_id: str,
+        pid: Dict[str, Any],
+        crim: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Upserts an extracted personal identity dossier into `identity_profiles`, matching
+        by national_id, mobile_phone, account_handle, or source_file_id so duplicate images
+        of the same subject enrich a single unified dossier.
+        """
+        nid = (pid.get("national_id") or "").strip()
+        mob = (pid.get("mobile_phone") or "").strip()
+        handle = (pid.get("account_handle") or "").strip()
+        full_n = (pid.get("full_name") or "").strip()
+
+        if not (nid or mob or handle or full_n):
+            return None
+
+        jud_notes_parts: List[str] = []
+        if crim.get("criminal_charges"):
+            jud_notes_parts.append("اتهامات: " + " ؛ ".join(crim["criminal_charges"]))
+        if crim.get("legal_articles"):
+            jud_notes_parts.append("مواد قانونی: " + " ؛ ".join(crim["legal_articles"]))
+        if crim.get("recommended_action"):
+            jud_notes_parts.append("اقدام: " + str(crim["recommended_action"]))
+        jud_notes = " | ".join(jud_notes_parts)
+
+        with get_db() as conn:
+            cur = conn.cursor()
+            existing_row = None
+            if nid:
+                cur.execute("SELECT * FROM identity_profiles WHERE national_id = ? LIMIT 1", (nid,))
+                existing_row = cur.fetchone()
+            if not existing_row and mob:
+                cur.execute("SELECT * FROM identity_profiles WHERE mobile_phone = ? LIMIT 1", (mob,))
+                existing_row = cur.fetchone()
+            if not existing_row and handle:
+                cur.execute("SELECT * FROM identity_profiles WHERE lower(account_handle) = lower(?) LIMIT 1", (handle,))
+                existing_row = cur.fetchone()
+            if not existing_row and file_id:
+                cur.execute("SELECT * FROM identity_profiles WHERE source_file_id = ? LIMIT 1", (file_id,))
+                existing_row = cur.fetchone()
+
+            fields_map = {
+                "source_file_id": file_id,
+                "first_name": (pid.get("first_name") or "").strip(),
+                "last_name": (pid.get("last_name") or "").strip(),
+                "full_name": full_n,
+                "father_name": (pid.get("father_name") or "").strip(),
+                "national_id": nid,
+                "birth_certificate_no": (pid.get("birth_certificate_no") or "").strip(),
+                "birth_date": (pid.get("birth_date") or "").strip(),
+                "birth_place": (pid.get("birth_place") or "").strip(),
+                "occupation": (pid.get("occupation") or "").strip(),
+                "mobile_phone": mob,
+                "secondary_mobile": (pid.get("secondary_mobile") or "").strip(),
+                "landline_phone": (pid.get("landline_phone") or "").strip(),
+                "province": (pid.get("province") or "").strip(),
+                "city": (pid.get("city") or "").strip(),
+                "address": (pid.get("address") or "").strip(),
+                "postal_code": (pid.get("postal_code") or "").strip(),
+                "gps_coordinates": (pid.get("gps_coordinates") or "").strip(),
+                "location_name": (pid.get("location_name") or "").strip(),
+                "account_handle": handle,
+                "numeric_id": (pid.get("numeric_id") or "").strip(),
+                "profile_url": (pid.get("profile_url") or "").strip(),
+                "personal_folder": (pid.get("personal_folder") or "").strip(),
+                "thematic_category": (pid.get("thematic_category") or "اجتماعی").strip(),
+                "risk_level": (crim.get("risk_level") or "عادی").strip(),
+                "judicial_notes": jud_notes,
+            }
+
+            if existing_row:
+                prof_id = existing_row["id"]
+                merged: Dict[str, Any] = {}
+                for k, new_v in fields_map.items():
+                    old_v = existing_row[k] if k in existing_row.keys() else ""
+                    if new_v and (not old_v or old_v == "موقعیت مکانی ثبت‌نشده" or len(str(new_v)) > len(str(old_v))):
+                        merged[k] = new_v
+                    else:
+                        merged[k] = old_v or ""
+                cur.execute(
+                    """
+                    UPDATE identity_profiles SET
+                        source_file_id = ?, first_name = ?, last_name = ?, full_name = ?,
+                        father_name = ?, national_id = ?, birth_certificate_no = ?, birth_date = ?,
+                        birth_place = ?, occupation = ?, mobile_phone = ?, secondary_mobile = ?,
+                        landline_phone = ?, province = ?, city = ?, address = ?, postal_code = ?,
+                        gps_coordinates = ?, location_name = ?, account_handle = ?, numeric_id = ?,
+                        profile_url = ?, personal_folder = ?, thematic_category = ?, risk_level = ?,
+                        judicial_notes = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (
+                        merged["source_file_id"],
+                        merged["first_name"],
+                        merged["last_name"],
+                        merged["full_name"],
+                        merged["father_name"],
+                        merged["national_id"],
+                        merged["birth_certificate_no"],
+                        merged["birth_date"],
+                        merged["birth_place"],
+                        merged["occupation"],
+                        merged["mobile_phone"],
+                        merged["secondary_mobile"],
+                        merged["landline_phone"],
+                        merged["province"],
+                        merged["city"],
+                        merged["address"],
+                        merged["postal_code"],
+                        merged["gps_coordinates"],
+                        merged["location_name"],
+                        merged["account_handle"],
+                        merged["numeric_id"],
+                        merged["profile_url"],
+                        merged["personal_folder"],
+                        merged["thematic_category"],
+                        merged["risk_level"],
+                        merged["judicial_notes"],
+                        prof_id,
+                    ),
+                )
+            else:
+                prof_id = str(uuid.uuid4())
+                cur.execute(
+                    """
+                    INSERT INTO identity_profiles (
+                        id, source_file_id, first_name, last_name, full_name,
+                        father_name, national_id, birth_certificate_no, birth_date,
+                        birth_place, occupation, mobile_phone, secondary_mobile,
+                        landline_phone, province, city, address, postal_code,
+                        gps_coordinates, location_name, account_handle, numeric_id,
+                        profile_url, personal_folder, thematic_category, risk_level,
+                        judicial_notes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        prof_id,
+                        fields_map["source_file_id"],
+                        fields_map["first_name"],
+                        fields_map["last_name"],
+                        fields_map["full_name"],
+                        fields_map["father_name"],
+                        fields_map["national_id"],
+                        fields_map["birth_certificate_no"],
+                        fields_map["birth_date"],
+                        fields_map["birth_place"],
+                        fields_map["occupation"],
+                        fields_map["mobile_phone"],
+                        fields_map["secondary_mobile"],
+                        fields_map["landline_phone"],
+                        fields_map["province"],
+                        fields_map["city"],
+                        fields_map["address"],
+                        fields_map["postal_code"],
+                        fields_map["gps_coordinates"],
+                        fields_map["location_name"],
+                        fields_map["account_handle"],
+                        fields_map["numeric_id"],
+                        fields_map["profile_url"],
+                        fields_map["personal_folder"],
+                        fields_map["thematic_category"],
+                        fields_map["risk_level"],
+                        fields_map["judicial_notes"],
+                    ),
+                )
+            cur.execute("SELECT * FROM identity_profiles WHERE id = ?", (prof_id,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    @classmethod
+    def list_identity_profiles(cls, query: str = "") -> List[Dict[str, Any]]:
+        with get_db() as conn:
+            cur = conn.cursor()
+            q = (query or "").strip()
+            if q:
+                like_q = f"%{q}%"
+                cur.execute(
+                    """
+                    SELECT * FROM identity_profiles
+                    WHERE full_name LIKE ? OR first_name LIKE ? OR last_name LIKE ?
+                       OR father_name LIKE ? OR national_id LIKE ? OR birth_certificate_no LIKE ?
+                       OR mobile_phone LIKE ? OR secondary_mobile LIKE ? OR landline_phone LIKE ?
+                       OR address LIKE ? OR city LIKE ? OR province LIKE ?
+                       OR account_handle LIKE ? OR numeric_id LIKE ? OR judicial_notes LIKE ?
+                    ORDER BY updated_at DESC, created_at DESC
+                    """,
+                    (like_q,) * 15,
+                )
+            else:
+                cur.execute("SELECT * FROM identity_profiles ORDER BY updated_at DESC, created_at DESC")
+            return [dict(r) for r in cur.fetchall()]
+
+    @classmethod
+    def upsert_identity_profile(cls, data: Dict[str, Any], profile_id: Optional[str] = None) -> Dict[str, Any]:
+        full_n = (data.get("full_name") or "").strip()
+        fn = (data.get("first_name") or "").strip()
+        ln = (data.get("last_name") or "").strip()
+        if not full_n and (fn or ln):
+            full_n = f"{fn} {ln}".strip()
+        elif full_n and not (fn or ln):
+            parts = full_n.split()
+            if len(parts) >= 2:
+                fn = parts[0]
+                ln = " ".join(parts[1:])
+            elif len(parts) == 1:
+                fn = parts[0]
+
+        with get_db() as conn:
+            cur = conn.cursor()
+            target_id = profile_id or str(uuid.uuid4())
+            cur.execute("SELECT id FROM identity_profiles WHERE id = ?", (target_id,))
+            exists = cur.fetchone() is not None
+
+            vals = (
+                data.get("source_file_id"),
+                fn,
+                ln,
+                full_n,
+                (data.get("father_name") or "").strip(),
+                (data.get("national_id") or "").strip(),
+                (data.get("birth_certificate_no") or "").strip(),
+                (data.get("birth_date") or "").strip(),
+                (data.get("birth_place") or "").strip(),
+                (data.get("occupation") or "").strip(),
+                (data.get("mobile_phone") or "").strip(),
+                (data.get("secondary_mobile") or "").strip(),
+                (data.get("landline_phone") or "").strip(),
+                (data.get("province") or "").strip(),
+                (data.get("city") or "").strip(),
+                (data.get("address") or "").strip(),
+                (data.get("postal_code") or "").strip(),
+                (data.get("gps_coordinates") or "").strip(),
+                (data.get("location_name") or "").strip(),
+                (data.get("account_handle") or "").strip(),
+                (data.get("numeric_id") or "").strip(),
+                (data.get("profile_url") or "").strip(),
+                (data.get("personal_folder") or "").strip(),
+                (data.get("thematic_category") or "اجتماعی").strip(),
+                (data.get("risk_level") or "عادی").strip(),
+                (data.get("judicial_notes") or "").strip(),
+            )
+
+            if exists:
+                cur.execute(
+                    """
+                    UPDATE identity_profiles SET
+                        source_file_id = ?, first_name = ?, last_name = ?, full_name = ?,
+                        father_name = ?, national_id = ?, birth_certificate_no = ?, birth_date = ?,
+                        birth_place = ?, occupation = ?, mobile_phone = ?, secondary_mobile = ?,
+                        landline_phone = ?, province = ?, city = ?, address = ?, postal_code = ?,
+                        gps_coordinates = ?, location_name = ?, account_handle = ?, numeric_id = ?,
+                        profile_url = ?, personal_folder = ?, thematic_category = ?, risk_level = ?,
+                        judicial_notes = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (*vals, target_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO identity_profiles (
+                        id, source_file_id, first_name, last_name, full_name,
+                        father_name, national_id, birth_certificate_no, birth_date,
+                        birth_place, occupation, mobile_phone, secondary_mobile,
+                        landline_phone, province, city, address, postal_code,
+                        gps_coordinates, location_name, account_handle, numeric_id,
+                        profile_url, personal_folder, thematic_category, risk_level,
+                        judicial_notes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (target_id, *vals),
+                )
+            cur.execute("SELECT * FROM identity_profiles WHERE id = ?", (target_id,))
+            row = cur.fetchone()
+            return dict(row)
+
+    @classmethod
+    def delete_identity_profile(cls, profile_id: str) -> bool:
+        with get_db() as conn:
+            cur = conn.execute("DELETE FROM identity_profiles WHERE id = ?", (profile_id,))
+            return cur.rowcount > 0
+
+    @classmethod
+    def sync_identity_profiles_from_archive(cls) -> List[Dict[str, Any]]:
+        files, _ = cls.list_files(limit=200, offset=0)
+        for f in files:
+            try:
+                cls.analyze_file_nature_and_topic(
+                    file_id=f.id,
+                    relative_path=f.title,
+                    auto_update_metadata=True,
+                )
+            except Exception:
+                pass
+        return cls.list_identity_profiles()
 
 

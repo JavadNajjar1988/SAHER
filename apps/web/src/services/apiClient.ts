@@ -322,6 +322,19 @@ export class ArchiveApiClient {
     );
   }
 
+  static async switchOcrEngine(
+    engineName: "paddleocr" | "hybrid" | "tesseract" | string,
+  ): Promise<import("../types/archive").OCREngineStatus> {
+    return this.requestJson<import("../types/archive").OCREngineStatus>(
+      `/api/v1/ocr/engine`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ engine_name: engineName }),
+      },
+    );
+  }
+
   static async importFile(
     file: File,
     topic?: string,
@@ -478,6 +491,7 @@ export class ArchiveApiClient {
     files: File[],
     folderName?: string,
     sourceUrl?: string,
+    ocrEngine: string = "paddleocr",
   ): Promise<import("../types/archive").FolderAnalysisResponse> {
     const formData = new FormData();
     const relPaths: string[] = [];
@@ -491,6 +505,9 @@ export class ArchiveApiClient {
     }
     if (sourceUrl && sourceUrl.trim()) {
       formData.append("source_url", sourceUrl.trim());
+    }
+    if (ocrEngine) {
+      formData.append("ocr_engine", ocrEngine);
     }
     formData.append("relative_paths", JSON.stringify(relPaths));
 
@@ -508,6 +525,7 @@ export class ArchiveApiClient {
     fileIds: string[],
     folderName?: string,
     sourceUrl?: string,
+    ocrEngine: string = "paddleocr",
   ): Promise<import("../types/archive").FolderAnalysisResponse> {
     return this.requestJson<import("../types/archive").FolderAnalysisResponse>(
       `/api/v1/images/analyze-existing`,
@@ -518,6 +536,7 @@ export class ArchiveApiClient {
           file_ids: fileIds,
           folder_name: folderName || "تصاویر منتخب کتابخانه",
           source_url: sourceUrl?.trim() || null,
+          ocr_engine: ocrEngine || "paddleocr",
         }),
       },
       90000,
@@ -572,6 +591,93 @@ export class ArchiveApiClient {
 
   static getSingleFileWordUrl(fileId: string): string {
     return this.buildUrl(`/api/v1/files/${encodeURIComponent(fileId)}/export-word`);
+  }
+
+  // Personal & Civil Identity Dossiers (مشخصات انفرادی و شناسنامه‌ای)
+  static async listIdentityProfiles(
+    query?: string,
+  ): Promise<import("../types/archive").IdentityProfileListResponse> {
+    const qs = query?.trim() ? `?q=${encodeURIComponent(query.trim())}` : "";
+    return this.requestJson<import("../types/archive").IdentityProfileListResponse>(
+      `/api/v1/profiles${qs}`,
+      { method: "GET" },
+    );
+  }
+
+  static async createIdentityProfile(
+    payload: Partial<import("../types/archive").IdentityProfileItem>,
+  ): Promise<import("../types/archive").IdentityProfileItem> {
+    return this.requestJson<import("../types/archive").IdentityProfileItem>(
+      `/api/v1/profiles`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  static async updateIdentityProfile(
+    profileId: string,
+    payload: Partial<import("../types/archive").IdentityProfileItem>,
+  ): Promise<import("../types/archive").IdentityProfileItem> {
+    return this.requestJson<import("../types/archive").IdentityProfileItem>(
+      `/api/v1/profiles/${encodeURIComponent(profileId)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  static async deleteIdentityProfile(profileId: string): Promise<{ deleted: boolean; id: string }> {
+    return this.requestJson<{ deleted: boolean; id: string }>(
+      `/api/v1/profiles/${encodeURIComponent(profileId)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  static async syncIdentityProfilesFromArchive(): Promise<import("../types/archive").IdentityProfileListResponse> {
+    return this.requestJson<import("../types/archive").IdentityProfileListResponse>(
+      `/api/v1/profiles/sync-from-archive`,
+      { method: "POST" },
+      90000,
+    );
+  }
+
+  static async downloadIdentityProfilesWordReport(
+    profileIds?: string[],
+    reportTitle?: string,
+  ): Promise<Blob> {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "X-Saher-Client": "web-ui/0.3.0",
+    };
+    if (this.sessionToken) {
+      headers["X-Saher-Session-Token"] = this.sessionToken;
+    }
+
+    const response = await fetch(this.buildUrl(`/api/v1/profiles/export-word`), {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile_ids: profileIds && profileIds.length > 0 ? profileIds : null,
+        report_title:
+          reportTitle || "گزارش جامع مشخصات انفرادی، شناسنامه‌ای، شماره موبایل و آدرس",
+      }),
+    });
+
+    if (!response.ok) {
+      throw new ApiClientError({
+        message: "خطا در تولید سند Word مشخصات انفرادی (.docx)",
+        status: response.status,
+        code: "PROFILE_WORD_EXPORT_FAILED",
+        isNetworkError: false,
+      });
+    }
+
+    return await response.blob();
   }
 }
 

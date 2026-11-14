@@ -36,7 +36,7 @@ class ImageAnalysisResult:
     width: int = 0
     height: int = 0
     aspect_ratio: float = 1.0
-    orientation: str = "افقی (Landscape)"
+    orientation: str = "افقی"
     color_mode: str = "RGB"
     dominant_color_hex: str = "#F5F3EE"
     color_profile_label: str = "زمینهٔ روشن کاغذی"
@@ -49,12 +49,21 @@ class ImageAnalysisResult:
     line_count: int = 0
     bbox_count: int = 0
     ocr_confidence: Optional[float] = None
+    ocr_engine: str = "paddleocr"
     extracted_text: str = ""
-    # Priority 1: Username & Account ID classification
+    # Priority 1: Personal Folder + Username & Account ID classification
+    personal_folder: str = "پوشهٔ عمومی آرشیو"
     account_id: str = ""
     account_username: str = ""
     account_label: str = "بدون نام کاربری / آیدی مشخص"
     platform_source: str = "اسکرین‌شات / تصویر عمومی"
+    # Image Capture Source & Subject / Location / GPS Classification
+    capture_source_category: str = "اسکرین‌شات موبایل / شبکهٔ اجتماعی"
+    subject_classification: str = "پست یا استوری شبکهٔ اجتماعی"
+    camera_info: str = "بدون فرادادهٔ دوربین (تصویر دیجیتال / اسکرین‌شات)"
+    location_name: str = "موقعیت مکانی ثبت‌نشده"
+    gps_coordinates: str = ""
+    detected_caption: str = ""
     # Priority 2: 12 Thematic Categories + Visual Nature
     thematic_category: str = "اجتماعی"
     image_nature: str = "سند یا برگهٔ متنی اسکن‌شده"
@@ -63,6 +72,10 @@ class ImageAnalysisResult:
     tags: List[str] = field(default_factory=list)
     key_findings: List[str] = field(default_factory=list)
     analysis_summary: str = ""
+    # Personal & Civil Identity Dossier (مشخصات انفرادی، شناسنامه‌ای، موبایل و آدرس)
+    personal_identity: Dict[str, Any] = field(default_factory=dict)
+    # Legal & Judicial Criminal Assessment (بررسی موارد مجرمانه بر اساس داده‌های حقوقی و قضایی)
+    criminal_assessment: Dict[str, Any] = field(default_factory=dict)
     # Structured Template (قواره) — strictly for «فرهنگی» and «اجتماعی»
     template_applicable: bool = False
     template_fields: Optional[Dict[str, Any]] = None
@@ -753,17 +766,32 @@ def build_cultural_social_template(
     return fields, formatted
 
 
+def _dms_to_decimal(dms_val: Any, ref: str = "N") -> Optional[float]:
+    try:
+        if isinstance(dms_val, (list, tuple)) and len(dms_val) == 3:
+            deg = float(dms_val[0])
+            minutes = float(dms_val[1])
+            seconds = float(dms_val[2])
+            dec = deg + (minutes / 60.0) + (seconds / 3600.0)
+            if ref and str(ref).upper().startswith(("S", "W")):
+                dec = -dec
+            return round(dec, 6)
+    except Exception:
+        pass
+    return None
+
+
 def _compute_visual_metrics(image_path: str) -> Dict[str, Any]:
     """
     Extracts genuine visual and geometric metrics from an image file using Pillow:
     dimensions, aspect ratio, orientation, luminance mean/contrast, paper-like light background
-    ratio, dark UI surface ratio, color saturation, edge density, and dominant RGB hex.
+    ratio, dark UI surface ratio, color saturation, edge density, dominant RGB hex, and EXIF/GPS metadata.
     """
     default_metrics = {
         "width": 800,
         "height": 600,
         "aspect_ratio": 1.33,
-        "orientation": "افقی (Landscape)",
+        "orientation": "افقی",
         "color_mode": "RGB",
         "dominant_color_hex": "#F7F5F0",
         "color_profile_label": "زمینهٔ روشن کاغذی",
@@ -773,6 +801,10 @@ def _compute_visual_metrics(image_path: str) -> Dict[str, Any]:
         "dark_bg_ratio": 0.04,
         "mean_saturation": 12.0,
         "edge_density": 0.06,
+        "skin_tone_ratio": 0.0,
+        "has_exif_camera": False,
+        "camera_info": "بدون فرادادهٔ دوربین (تصویر دیجیتال / اسکرین‌شات)",
+        "exif_gps": "",
     }
     if not image_path or not os.path.exists(image_path):
         return default_metrics
@@ -786,11 +818,49 @@ def _compute_visual_metrics(image_path: str) -> Dict[str, Any]:
 
             ratio = round(width / float(height), 2)
             if 0.92 <= ratio <= 1.08:
-                orientation = "مربعی (Square)"
+                orientation = "مربعی"
             elif ratio > 1.08:
-                orientation = "افقی (Landscape)"
+                orientation = "افقی"
             else:
-                orientation = "عمودی (Portrait)"
+                orientation = "عمودی"
+
+            # Extract EXIF camera & GPS tags if present
+            has_exif_camera = False
+            camera_parts: List[str] = []
+            exif_gps = ""
+            try:
+                exif_data = img.getexif()
+                if exif_data:
+                    make = str(exif_data.get(271, "") or "").strip()
+                    model = str(exif_data.get(272, "") or "").strip()
+                    dt_orig = str(exif_data.get(36867, "") or exif_data.get(306, "") or "").strip()
+                    if make or model:
+                        has_exif_camera = True
+                        camera_parts.append(f"{make} {model}".strip())
+                    if dt_orig:
+                        camera_parts.append(f"تاریخ ثبت: {dt_orig}")
+                    # GPS IFD (34853)
+                    gps_ifd = None
+                    if hasattr(exif_data, "get_ifd"):
+                        try:
+                            gps_ifd = exif_data.get_ifd(0x8825)
+                        except Exception:
+                            gps_ifd = None
+                    if not gps_ifd and isinstance(exif_data.get(34853), dict):
+                        gps_ifd = exif_data.get(34853)
+                    if gps_ifd and isinstance(gps_ifd, dict):
+                        lat = _dms_to_decimal(gps_ifd.get(2), str(gps_ifd.get(1, "N")))
+                        lon = _dms_to_decimal(gps_ifd.get(4), str(gps_ifd.get(3, "E")))
+                        if lat is not None and lon is not None:
+                            exif_gps = f"{lat:.5f}, {lon:.5f}"
+            except Exception:
+                pass
+
+            camera_info = (
+                " · ".join(camera_parts)
+                if camera_parts
+                else "بدون فرادادهٔ دوربین (تصویر دیجیتال / اسکرین‌شات)"
+            )
 
             rgb = img.convert("RGB")
             thumb = rgb.resize((64, 64))
@@ -805,6 +875,7 @@ def _compute_visual_metrics(image_path: str) -> Dict[str, Any]:
 
             paper_count = 0
             dark_count = 0
+            skin_count = 0
             sat_sum = 0.0
             r_sum, g_sum, b_sum = 0, 0, 0
 
@@ -821,9 +892,12 @@ def _compute_visual_metrics(image_path: str) -> Dict[str, Any]:
                     paper_count += 1
                 elif lum <= 55:
                     dark_count += 1
+                if r > 95 and g > 40 and b > 20 and (c_max - c_min) > 15 and abs(r - g) > 15 and r > g and r > b:
+                    skin_count += 1
 
             paper_ratio = round(paper_count / total_px, 3)
             dark_ratio = round(dark_count / total_px, 3)
+            skin_ratio = round(skin_count / total_px, 3)
             mean_sat = round(sat_sum / total_px, 1)
 
             avg_r = int(r_sum / total_px)
@@ -868,11 +942,617 @@ def _compute_visual_metrics(image_path: str) -> Dict[str, Any]:
                 "contrast_std": std_b,
                 "paper_bg_ratio": paper_ratio,
                 "dark_bg_ratio": dark_ratio,
+                "skin_tone_ratio": skin_ratio,
                 "mean_saturation": mean_sat,
                 "edge_density": edge_density,
+                "has_exif_camera": has_exif_camera,
+                "camera_info": camera_info,
+                "exif_gps": exif_gps,
             }
     except Exception:
         return default_metrics
+
+
+_DECIMAL_COORDS_REGEX = re.compile(
+    r"(?<!\d)([23]\d\.\d{3,8})\s*[,،/\s]\s*([456]\d\.\d{3,8})(?!\d)"
+)
+_GENERIC_COORDS_REGEX = re.compile(
+    r"(?:مختصات|طول\s*و\s*عرض\s*جغرافیایی|gps|coords?|location|loc)\s*[:：\-]?\s*([+-]?\d{1,2}\.\d{3,8}\s*[,،\s]\s*[+-]?\d{1,3}\.\d{3,8})",
+    re.IGNORECASE,
+)
+_DMS_COORDS_REGEX = re.compile(
+    r"(\d{1,2}°\s*\d{1,2}['′]\s*\d{1,2}(?:\.\d+)?[\"″]?\s*[NSns]\s*[,،\s]?\s*\d{1,3}°\s*\d{1,2}['′]\s*\d{1,2}(?:\.\d+)?[\"″]?\s*[EWew])"
+)
+
+
+def _extract_location_and_coordinates(
+    title: str,
+    relative_path: str,
+    norm_text: str,
+    exif_gps: str = "",
+) -> Tuple[str, str, str, str, str, str]:
+    """
+    Extracts:
+    - location_name (موقعیت مکانی تجمیعی: استان، شهرستان/شهر، محل)
+    - gps_coordinates (مختصات جغرافیایی از EXIF یا متن روی عکس)
+    - province (استان)
+    - city (شهر / شهرستان)
+    - address (آدرس دقیق محل سکونت / فعالیت)
+    - postal_code (کد پستی ۱۰ رقمی)
+    """
+    ascii_all = _to_ascii_digits(f"{norm_text or ''}\n{relative_path or ''}\n{title or ''}")
+    norm_only = _to_ascii_digits(norm_text or "")
+
+    # 1. GPS Coordinates
+    gps_coordinates = (exif_gps or "").strip()
+    if not gps_coordinates:
+        m_gen = _GENERIC_COORDS_REGEX.search(ascii_all)
+        if m_gen:
+            gps_coordinates = re.sub(r"\s+", " ", m_gen.group(1).strip())
+    if not gps_coordinates:
+        m_dec = _DECIMAL_COORDS_REGEX.search(ascii_all)
+        if m_dec:
+            gps_coordinates = f"{m_dec.group(1)}, {m_dec.group(2)}"
+    if not gps_coordinates:
+        m_dms = _DMS_COORDS_REGEX.search(ascii_all)
+        if m_dms:
+            gps_coordinates = m_dms.group(1).strip()
+
+    # 2. Province & City
+    province = ""
+    city = ""
+
+    m_prov = re.search(r"استان\s*[:：\-]?\s*([\u0600-\u06FF\s]{2,22})", norm_only)
+    if m_prov:
+        cand_p = m_prov.group(1).strip().split("\n")[0].split("،")[0].split("-")[0].strip()
+        for known_p in _PROVINCE_HASHTAG_MAP:
+            if known_p in cand_p:
+                province = known_p
+                break
+        if not province and len(cand_p) <= 20:
+            province = cand_p
+
+    m_city = re.search(r"(?:شهرستان|شهر)\s*[:：\-]?\s*([\u0600-\u06FF\s]{2,22})", norm_only)
+    if m_city:
+        cand_c = m_city.group(1).strip().split("\n")[0].split("،")[0].split("-")[0].strip()
+        for known_c in _CITY_TO_PROVINCE_AND_TAG:
+            if known_c in cand_c:
+                city = known_c
+                break
+        if not city and len(cand_c) <= 18 and not any(w in cand_c for w in ("کدملی", "شماره", "آدرس")):
+            city = cand_c.split()[0]
+
+    for known_city, (prov_tag, _) in _CITY_TO_PROVINCE_AND_TAG.items():
+        if known_city in ascii_all:
+            if not city:
+                city = known_city
+            if not province:
+                province = prov_tag.lstrip("#").replace("_", " ")
+            break
+
+    if not province:
+        for known_prov in _PROVINCE_HASHTAG_MAP:
+            if known_prov in ascii_all:
+                province = known_prov
+                break
+
+    # 3. Street Address & Location Label
+    address = ""
+    m_addr = re.search(
+        r"(?:آدرس(?:\s*محل\s*سکونت|\s*محل\s*کار|\s*دقیق)?|نشانی(?:\s*محل\s*سکونت)?|محل\s*سکونت)\s*[:：\-]\s*([^\n\r✅#]{4,140})",
+        norm_only,
+    )
+    if m_addr:
+        cand_addr = m_addr.group(1).strip()
+        if not any(cand_addr.startswith(w) for w in ("اینترنتی", "پیج", "صفحه", "کانال", "سایت", "http", "www", "@")):
+            address = cand_addr
+
+    if not address:
+        m_street = re.search(
+            r"((?:خیابان|بلوار|میدان|فلکه|کوچه|شهرک|بزرگراه)\s+[\u0600-\u06FF0-9\s،\-]{4,90})",
+            norm_only,
+        )
+        if m_street:
+            address = m_street.group(1).strip().splitlines()[0].strip()
+
+    # 4. Postal Code
+    postal_code = ""
+    m_post = re.search(r"(?:کد\s*پستی|کدپستی)\s*[:：\-]?\s*(\d{10})", norm_only)
+    if m_post:
+        postal_code = m_post.group(1).strip()
+
+    # 5. Explicit location name (موقعیت مکانی / منطقه)
+    explicit_loc = ""
+    m_loc = re.search(
+        r"(?:موقعیت(?:\s*مکانی)?|محل\s*ثبت|منطقه(?:\s*عمومی)?|لوکیشن|location)\s*[:：\-]\s*([^\n\r|·•✅#]{2,60})",
+        ascii_all,
+        re.IGNORECASE,
+    )
+    if m_loc:
+        explicit_loc = m_loc.group(1).strip()
+
+    loc_parts: List[str] = []
+    if province:
+        loc_parts.append(f"استان {province}" if not province.startswith("استان") else province)
+    if city and city not in province:
+        loc_parts.append(f"شهرستان {city}" if not city.startswith(("شهر", "شهرستان")) else city)
+    if explicit_loc and explicit_loc not in " ".join(loc_parts):
+        loc_parts.append(explicit_loc)
+    elif address and len(address) <= 55 and address not in " ".join(loc_parts):
+        loc_parts.append(address)
+
+    if loc_parts:
+        location_name = " ، ".join(loc_parts)
+    elif gps_coordinates:
+        location_name = f"مختصات ثبت‌شده ({gps_coordinates})"
+    else:
+        location_name = "موقعیت مکانی ثبت‌نشده"
+
+    return location_name, gps_coordinates, province, city, address, postal_code
+
+
+def _classify_capture_source_and_subject(
+    title: str,
+    relative_path: str,
+    norm_text: str,
+    visual: Dict[str, Any],
+    word_count: int,
+    account_id: str,
+    account_label: str,
+    gps_coordinates: str,
+    location_name: str,
+) -> Tuple[str, str, str, str]:
+    """
+    Determines:
+    1. `capture_source_category`: دسته‌بندی عکس از نظر اسکرین‌شات، عکس با دوربین، عکس سوژه، سند اسکن‌شده، نقشه و ...
+    2. `subject_classification`: دسته‌بندی بر اساس نوع سوژه (عکس سوژه/چهره، پست یا استوری، سند هویتی، تصویر میدانی، نقشه/مختصات)
+    3. `personal_folder`: پوشهٔ شخصی تخصیص‌یافته بر اساس ساختار پوشه یا شناسه آیدی / نام فرد
+    4. `detected_caption`: عنوان و نوشتهٔ شاخص استخراج‌شده از روی عکس
+    """
+    combined_lower = f"{relative_path} {title} {norm_text}".lower()
+    base_name = os.path.basename(title).lower()
+
+    has_exif = bool(visual.get("has_exif_camera"))
+    paper_ratio = float(visual.get("paper_bg_ratio", 0.0))
+    dark_ratio = float(visual.get("dark_bg_ratio", 0.0))
+    skin_ratio = float(visual.get("skin_tone_ratio", 0.0))
+    mean_sat = float(visual.get("mean_saturation", 0.0))
+    ratio = float(visual.get("aspect_ratio", 1.0))
+
+    is_camera_filename = bool(
+        re.match(r"^(?:img|dsc|pxl|dcim|photo|cam|dji|gop)[_-]?\d", base_name)
+    ) or any(w in combined_lower for w in ("عکس دوربین", "دوربین", "عکاسی میدانی", "camera", "exif", "raw photo"))
+
+    is_screenshot_hint = (
+        any(w in combined_lower for w in ("screenshot", "screen", "اسکرین", "نماگرفت", "capture", "snap", "shot", "اینستاگرام", "تلگرام", "استوری", "پست"))
+        or bool(account_id)
+    )
+
+    is_subject_portrait_hint = any(
+        w in combined_lower
+        for w in ("عکس سوژه", "تصویر سوژه", "سوژه", "چهره", "پرسنلی", "سلفی", "پروفایل", "portrait", "subject", "face", "selfie", "avatar")
+    )
+
+    is_map_or_coord_hint = (
+        bool(gps_coordinates)
+        and any(w in combined_lower for w in ("نقشه", "ماهواره", "مختصات", "کروکی", "هوایی", "map", "satellite", "gps"))
+    ) or any(w in combined_lower for w in ("نقشه عملیاتی", "تصویر ماهواره‌ای", "نقشه جغرافیایی", "کروکی مکانی"))
+
+    is_identity_doc_hint = any(
+        w in combined_lower
+        for w in ("شناسنامه", "کارت ملی", "گواهینامه", "گذرنامه", "پاسپورت", "سند هویتی", "مشخصات انفرادی", "شماره شناسنامه", "نام پدر")
+    )
+
+    # 1. Capture Source Category (نوع عکس از نظر اسکرین‌شات، عکس با دوربین و ...)
+    if is_map_or_coord_hint:
+        capture_source_category = "نقشه، تصویر ماهواره‌ای یا مختصات جغرافیایی"
+    elif has_exif or (is_camera_filename and not is_screenshot_hint):
+        capture_source_category = "عکس با دوربین (عکاسی میدانی / فرادادهٔ EXIF)"
+    elif is_subject_portrait_hint or (skin_ratio >= 0.18 and word_count <= 6 and not is_screenshot_hint):
+        capture_source_category = "عکس سوژه و چهرهٔ فرد (پرسنلی / سلفی / سوژه)"
+    elif is_screenshot_hint or (dark_ratio >= 0.35 and word_count >= 2):
+        if ratio <= 0.85 or any(w in combined_lower for w in ("اینستاگرام", "تلگرام", "استوری", "موبایل", "سیم کارت", "instagram", "telegram")):
+            capture_source_category = "اسکرین‌شات موبایل / شبکهٔ اجتماعی"
+        else:
+            capture_source_category = "اسکرین‌شات دسکتاپ / محیط نرم‌افزاری"
+    elif paper_ratio >= 0.55 and word_count >= 4:
+        capture_source_category = "سند، نامه یا فرم اسکن‌شده"
+    elif mean_sat >= 35 and word_count <= 5:
+        capture_source_category = "عکس با دوربین (عکاسی میدانی / منظره و تجهیزات)"
+    else:
+        capture_source_category = "اسکرین‌شات موبایل / شبکهٔ اجتماعی"
+
+    # 2. Subject Classification (دسته‌بندی بر اساس عکس سوژه، شناسه آیدی، سند هویتی، موقعیت مکانی)
+    if is_subject_portrait_hint or capture_source_category.startswith("عکس سوژه"):
+        subject_classification = f"عکس سوژه و چهرهٔ فرد ({account_label})" if account_id else "عکس سوژه و چهرهٔ انفرادی"
+    elif is_identity_doc_hint:
+        subject_classification = "تصویر اسناد و مدارک هویتی / شناسنامه‌ای"
+    elif is_map_or_coord_hint or gps_coordinates:
+        subject_classification = f"تصویر دارای موقعیت و مختصات مکانی ({gps_coordinates or location_name})"
+    elif account_id:
+        subject_classification = f"پست / استوری دارای شناسه آی‌دی روی عکس ({account_id})"
+    elif capture_source_category.startswith("سند"):
+        subject_classification = "سند متنی، پرونده یا مکاتبهٔ اداری"
+    else:
+        subject_classification = "تصویر میدانی / تجهیزات / صحنه"
+
+    # 3. Personal Folder (پوشه‌بندی شخصی پیش از دسته‌بندی ۱۲گانه)
+    folder_from_path = ""
+    if relative_path and "/" in relative_path.replace("\\", "/"):
+        parts = [p.strip() for p in relative_path.replace("\\", "/").split("/")[:-1] if p.strip()]
+        if parts:
+            folder_from_path = parts[-1]
+
+    if folder_from_path and account_id:
+        personal_folder = f"پوشهٔ شخصی: {folder_from_path} ({account_label})"
+    elif account_id and account_label != "بدون نام کاربری / آیدی مشخص":
+        personal_folder = f"پوشهٔ شخصی: {account_label}"
+    elif folder_from_path:
+        personal_folder = f"پوشهٔ شخصی: {folder_from_path}"
+    else:
+        personal_folder = "پوشهٔ عمومی (فاقد شناسهٔ شخصی مجزا)"
+
+    # 4. Exact Title & Written Text Caption
+    lines = [ln.strip() for ln in (norm_text or "").splitlines() if ln.strip()]
+    if lines:
+        top_lines = " | ".join(lines[:3])
+        detected_caption = f"عنوان فایل: «{title}» — نوشتهٔ روی عکس: «{top_lines[:220]}»"
+    else:
+        detected_caption = f"عنوان فایل: «{title}» (فاقد نوشتهٔ متنی روی تصویر)"
+
+    return capture_source_category, subject_classification, personal_folder, detected_caption
+
+
+def extract_personal_identity_profile(
+    title: str,
+    relative_path: str,
+    norm_text: str,
+    account_id: str,
+    account_username: str,
+    account_label: str,
+    personal_folder: str,
+    thematic_category: str,
+    location_name: str,
+    gps_coordinates: str,
+    province: str,
+    city: str,
+    address: str,
+    postal_code: str,
+    template_fields: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Extracts structured Personal & Civil Identity Specifications (مشخصات انفرادی، شناسنامه‌ای،
+    شماره موبایل، تلفن همراه، تلفن ثابت، آدرس و موقعیت مکانی) from OCR text and metadata.
+    """
+    tf = template_fields or {}
+    ascii_text = _to_ascii_digits(norm_text or "")
+
+    # 1. First Name, Last Name, Full Name
+    first_name = ""
+    last_name = ""
+    full_name = (tf.get("full_name") or "").strip()
+
+    m_fn = re.search(r"(?:^|\n)\s*(?:✅\s*)?نام\s*[:：\-]\s*([^\n\r|·•✅]{2,25})", norm_text or "")
+    m_ln = re.search(r"(?:^|\n)\s*(?:✅\s*)?نام\s*خانوادگی\s*[:：\-]\s*([^\n\r|·•✅]{2,30})", norm_text or "")
+    if m_fn:
+        cand_fn = m_fn.group(1).strip()
+        if not any(cand_fn.startswith(w) for w in ("و نام خانوادگی", "پدر", "کاربری", "صفحه")):
+            first_name = cand_fn
+    if m_ln:
+        last_name = m_ln.group(1).strip()
+
+    if not full_name:
+        m_full = re.search(
+            r"(?:نام\s*و\s*نام\s*خانوادگی|نام\s*کامل|مشخصات\s*فرد|نام\s*سوژه|هویت)\s*[:：\-]\s*([^\n\r|·•✅]{2,45})",
+            norm_text or "",
+        )
+        if m_full:
+            cand = m_full.group(1).strip()
+            if not any(cand.startswith(w) for w in ("کدملی", "کد ملی", "شماره", "شغل", "تخلف")):
+                full_name = cand
+
+    if full_name and not (first_name or last_name):
+        parts = full_name.split()
+        if len(parts) >= 2:
+            first_name = parts[0]
+            last_name = " ".join(parts[1:])
+        elif len(parts) == 1:
+            first_name = parts[0]
+    elif (first_name or last_name) and not full_name:
+        full_name = f"{first_name} {last_name}".strip()
+
+    # 2. Father's Name (نام پدر / فرزند)
+    father_name = ""
+    m_father = re.search(
+        r"(?:نام\s*پدر|فرزند)\s*[:：\-]\s*([^\n\r|·•✅،,]{2,28})",
+        norm_text or "",
+    )
+    if m_father:
+        father_name = m_father.group(1).strip()
+
+    # 3. National ID (کد ملی)
+    national_id = (tf.get("national_id") or "").strip()
+    if not national_id:
+        m_nid = re.search(r"(?:کد\s*ملی|کدملی|شماره\s*ملی)\s*[:：\-]?\s*(\d{8,10})", ascii_text)
+        if m_nid:
+            national_id = m_nid.group(1).strip()
+
+    # 4. Birth Certificate Number (شماره شناسنامه)
+    birth_certificate_no = ""
+    m_sh = re.search(
+        r"(?:شماره\s*شناسنامه|ش\.?\s*ش|شناسنامه)\s*[:：\-]?\s*(\d{1,10})",
+        ascii_text,
+    )
+    if m_sh:
+        birth_certificate_no = m_sh.group(1).strip()
+
+    # 5. Birth Date (تاریخ تولد) & Birth/Issue Place (محل تولد / صدور)
+    birth_date = ""
+    m_bd = re.search(
+        r"(?:تاریخ\s*تولد|متولد)\s*[:：\-]?\s*(\d{2,4}/\d{1,2}/\d{1,2}|\d{4})",
+        ascii_text,
+    )
+    if m_bd:
+        birth_date = m_bd.group(1).strip()
+
+    birth_place = ""
+    m_bp = re.search(
+        r"(?:محل\s*تولد|محل\s*صدور|صادره\s*از)\s*[:：\-]?\s*([\u0600-\u06FF\s]{2,25})",
+        norm_text or "",
+    )
+    if m_bp:
+        birth_place = m_bp.group(1).strip().splitlines()[0].strip()
+    elif city:
+        birth_place = city
+
+    # 6. Mobile Phone(s) & Landline Phone (شماره موبایل، تلفن همراه و تلفن ثابت)
+    mobile_phones: List[str] = []
+    compact_ascii = re.sub(r"[\s\-]", "", ascii_text)
+    for m_mob in re.finditer(r"(?<!\d)((?:\+98|0098|0)9\d{9})(?!\d)", compact_ascii):
+        raw_m = m_mob.group(1)
+        if raw_m.startswith("+98"):
+            raw_m = "0" + raw_m[3:]
+        elif raw_m.startswith("0098"):
+            raw_m = "0" + raw_m[4:]
+        if raw_m not in mobile_phones:
+            mobile_phones.append(raw_m)
+
+    if tf.get("phone_number") and tf["phone_number"] not in mobile_phones:
+        mobile_phones.insert(0, str(tf["phone_number"]).strip())
+
+    mobile_phone = mobile_phones[0] if mobile_phones else ""
+    secondary_mobile = mobile_phones[1] if len(mobile_phones) > 1 else ""
+
+    landline_phone = ""
+    m_land = re.search(
+        r"(?:تلفن\s*ثابت|تلفن\s*منزل|تلفن\s*محل\s*کار|شماره\s*ثابت)\s*[:：\-]?\s*(0[1-8]\d[\d\-\s]{6,10}\d)",
+        ascii_text,
+    )
+    if m_land:
+        landline_phone = re.sub(r"[\s\-]", "", m_land.group(1))
+    else:
+        m_city_land = re.search(r"(?<!\d)(0(?:21|26|25|31|51|71|41|11|13|61|81|83|34|56|58)\d{7,8})(?!\d)", compact_ascii)
+        if m_city_land:
+            landline_phone = m_city_land.group(1)
+
+    # 7. Occupation (شغل)
+    occupation = (tf.get("occupation") or "").strip()
+    if not occupation:
+        m_occ = re.search(r"(?:شغل|حرفه|صنف|سمت)\s*[:：\-]\s*([^\n\r|·•✅]{2,40})", norm_text or "")
+        if m_occ:
+            occupation = m_occ.group(1).strip()
+
+    # 8. Numeric ID & Profile URL
+    numeric_id = (tf.get("numeric_id") or "").strip()
+    if not numeric_id:
+        m_num = re.search(
+            r"(?:آیدی\s*عددی|ایدی\s*عددی|شناسه\s*عددی)\s*[:：\-]?\s*(\d{4,18})",
+            ascii_text,
+        )
+        if m_num:
+            numeric_id = m_num.group(1).strip()
+
+    profile_url = (tf.get("profile_url") or "").strip()
+    if not profile_url and account_id and account_id != "نامشخص":
+        clean_h = account_id.lstrip("@").strip()
+        if re.match(r"^[A-Za-z0-9_.]{2,40}$", clean_h):
+            profile_url = f"https://www.instagram.com/{clean_h}"
+
+    has_identity_data = bool(
+        full_name or national_id or birth_certificate_no or mobile_phone or landline_phone or address or account_id
+    )
+
+    return {
+        "has_identity_data": has_identity_data,
+        "first_name": first_name,
+        "last_name": last_name,
+        "full_name": full_name or (account_username if re.search(r"[\u0600-\u06FF]", account_username or "") else ""),
+        "father_name": father_name,
+        "national_id": national_id,
+        "birth_certificate_no": birth_certificate_no,
+        "birth_date": birth_date,
+        "birth_place": birth_place,
+        "occupation": occupation,
+        "mobile_phone": mobile_phone,
+        "secondary_mobile": secondary_mobile,
+        "landline_phone": landline_phone,
+        "province": province,
+        "city": city,
+        "address": address,
+        "postal_code": postal_code,
+        "location_name": location_name,
+        "gps_coordinates": gps_coordinates,
+        "account_handle": account_id or "",
+        "account_label": account_label,
+        "numeric_id": numeric_id,
+        "profile_url": profile_url,
+        "personal_folder": personal_folder,
+        "thematic_category": thematic_category,
+    }
+
+
+_CRIMINAL_RULES_CATALOG: List[Dict[str, Any]] = [
+    {
+        "category": "جرایم علیه عفت و اخلاق عمومی و فضای مجازی",
+        "keywords": ["ابتذال", "ترویج ابتذال", "مبتذل", "مستهجن", "هنجارشکنی", "کشف حجاب", "بی‌حجابی", "مدلینگ غیرمجاز", "مسدودی سیم کارت", "مسدودسازی"],
+        "charge": "انتشار و ترویج محتوای مبتذل و هنجارشکنانه در فضای مجازی",
+        "article": "مادهٔ ۱۴ قانون جرایم رایانه‌ای (مادهٔ ۷۴۲ قانون مجازات اسلامی - تعزیرات) و مادهٔ ۶۳۸ ق.م.ا",
+        "severity": 2,
+        "action": "مستندسازی اسکرین‌شات‌ها، استعلام هویت صاحب سیم‌کارت و آیدی عددی، و ارسال گزارش جهت صدور دستور قضایی مسدودسازی صفحه و سیم‌کارت",
+    },
+    {
+        "category": "جرایم جاسوسی و افشای اسناد و اطلاعات طبقه‌بندی‌شده",
+        "keywords": ["جاسوسی", "جاسوس", "موساد", "سیا", "سرویس بیگانه", "فوق محرمانه", "به‌کلی سری", "به کلی سری", "تخلیه اطلاعاتی", "عامل نفوذی", "افشای اسناد", "شنود", "خانه امن"],
+        "charge": "جاسوسی، جمع‌آوری و انتقال اسناد و اطلاعات طبقه‌بندی‌شده به عناصر غیرمجاز/بیگانه",
+        "article": "مواد ۵۰۱، ۵۰۲ و ۵۰۵ قانون مجازات اسلامی (کتاب پنجم - تعزیرات)",
+        "severity": 4,
+        "action": "ارجاع فوری به مرجع قضایی ذی‌صلاح (دادسرای امنیت) و حفاظت اطلاعات جهت توقیف ادلهٔ دیجیتال و شناسایی سرپل ارتباطی",
+    },
+    {
+        "category": "عکسبرداری و تصویربرداری غیرمجاز از اماکن نظامی، دفاعی و پهپادی",
+        "keywords": ["پادگان", "مقر نظامی", "منطقه نظامی", "عکسبرداری ممنوع", "تصویربرداری غیرمجاز", "مختصات سایت", "سایت موشکی", "سایت راداری", "آشیانه پهپاد", "پهپاد", "ریزپرنده", "پدافند"],
+        "charge": "بررسی صحنه و تصویربرداری/ثبت مختصات از اماکن و تجهیزات نظامی، دفاعی یا مرزی",
+        "article": "مادهٔ ۵۰۳ قانون مجازات اسلامی (تعزیرات) — ورود و عکسبرداری از اماکن نظامی و مناطق ممنوعه",
+        "severity": 3,
+        "action": "بررسی مجوز تصویربرداری، استخراج دقیق مختصات جغرافیایی (EXIF/GPS) و استعلام حفاظتی از ردهٔ ذی‌ربط",
+    },
+    {
+        "category": "جرایم سایبری، دسترسی غیرمجاز، هک و خرابکاری رایانه‌ای",
+        "keywords": ["هک", "هکر", "نفوذ سایبری", "حمله سایبری", "بدافزار", "باج‌افزار", "باج افزار", "نشت داده", "اکسپلویت", "دی‌داس", "ddos", "exploit", "ransomware", "فیشینگ", "سرقت اطلاعات"],
+        "charge": "دسترسی غیرمجاز، شنود، اخلال در سامانه‌های رایانه‌ای و انتشار بدافزار/نشت داده",
+        "article": "مواد ۱، ۲، ۳، ۸، ۹ و ۱۰ قانون جرایم رایانه‌ای (مواد ۷۲۹ الی ۷۳۸ ق.م.ا)",
+        "severity": 3,
+        "action": "ثبت لاگ‌ها و هش SHA-256 تصویر به عنوان دلیل الکترونیکی و ارجاع به پلیس فتا و دادسرای ویژهٔ جرایم رایانه‌ای",
+    },
+    {
+        "category": "جرایم علیه امنیت داخلی و خارجی، اغتشاش و قاچاق سلاح",
+        "keywords": ["تهدید امنیتی", "تروریستی", "ترور", "قاچاق سلاح", "اخلالگر", "شورش", "ناامنی", "فراخوان", "گروهک", "اشرار", "مسلحانه", "بمب‌گذاری", "خرابکاری"],
+        "charge": "اقدام علیه امنیت ملی، تبلیغ علیه نظام یا همکاری با گروه‌های معاند و مسلح",
+        "article": "مواد ۵۰۰، ۵۱۲، ۶۱۰ و ۶۱۱ قانون مجازات اسلامی (تعزیرات) و قانون مجازات قاچاق اسلحه و مهمات",
+        "severity": 4,
+        "action": "تشکیل پروندهٔ قضایی فوری، شناسایی هویت انفرادی و موقعیت مکانی سوژه و اعمال دستور قضایی ضابطین",
+    },
+    {
+        "category": "کلاهبرداری رایانه‌ای، جرایم اقتصادی و اخلال در نظام مالی",
+        "keywords": ["کلاهبرداری", "پولشویی", "قاچاق ارز", "فاکتور صوری", "حساب اجاره‌ای", "فیش جعلی", "رسید جعلی", "شرط‌بندی", "قمار", "اختلاس", "فرار مالیاتی"],
+        "charge": "کلاهبرداری رایانه‌ای، تحصیل مال از طریق نامشروع یا پولشویی",
+        "article": "مادهٔ ۱۳ قانون جرایم رایانه‌ای (مادهٔ ۷۴۱ ق.م.ا) و مادهٔ ۲ قانون تشدید مجازات مرتکبین ارتشاء، اختلاس و کلاهبرداری",
+        "severity": 3,
+        "action": "ردیابی شماره حساب/کارت و شماره تماس درج‌شده در تصویر و درخواست مسدودی حساب از طریق مرجع قضایی",
+    },
+    {
+        "category": "هتک حیثیت، نشر اکاذیب و توهین به مقدسات",
+        "keywords": ["هتک حیثیت", "نشر اکاذیب", "افترا", "توهین به مقدسات", "اهانت", "شایعه", "تشویش اذهان عمومی", "تهدید به افشا", "اخاذی"],
+        "charge": "نشر اکاذیب، هتک حیثیت یا اهانت به مقدسات در بستر سامانه‌های مخابراتی و فضای مجازی",
+        "article": "مواد ۱۶، ۱۷ و ۱۸ قانون جرایم رایانه‌ای (مواد ۷۴۴ الی ۷۴۶ ق.م.ا) و مادهٔ ۵۱۳ قانون مجازات اسلامی",
+        "severity": 2,
+        "action": "مستندسازی عین عبارات درج‌شده روی تصویر و تشکیل پرونده در دادسرای عمومی و انقلاب / جرایم رایانه‌ای",
+    },
+]
+
+
+def evaluate_criminal_and_judicial_indicators(
+    title: str,
+    norm_text: str,
+    thematic_category: str,
+    account_label: str,
+    personal_identity: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Analyzes the image strictly based on its exact title (`title`) and written OCR text (`norm_text`),
+    evaluating criminal/offense indicators against Iranian legal & judicial data (قانون جرایم رایانه‌ای
+    and قانون مجازات اسلامی - کتاب پنجم تعزیرات).
+    """
+    combined = f"{title or ''}\n{norm_text or ''}"
+    combined_lower = combined.lower()
+    lines = [ln.strip() for ln in (norm_text or "").splitlines() if ln.strip()]
+
+    matched_charges: List[str] = []
+    matched_articles: List[str] = []
+    evidence_quotes: List[str] = []
+    matched_actions: List[str] = []
+    max_severity = 0
+
+    for rule in _CRIMINAL_RULES_CATALOG:
+        found_kws = [kw for kw in rule["keywords"] if kw in combined_lower]
+        if found_kws:
+            if rule["charge"] not in matched_charges:
+                matched_charges.append(rule["charge"])
+            if rule["article"] not in matched_articles:
+                matched_articles.append(rule["article"])
+            if rule["action"] not in matched_actions:
+                matched_actions.append(rule["action"])
+            if rule["severity"] > max_severity:
+                max_severity = rule["severity"]
+
+            # Extract exact verbatim line from OCR text or title containing the keyword
+            for kw in found_kws[:3]:
+                quoted = False
+                for ln in lines:
+                    if kw in ln.lower():
+                        q_str = f"عبارت مستخرج از متن عکس: «{ln[:140]}» (کلیدواژهٔ منطبق: {kw})"
+                        if q_str not in evidence_quotes:
+                            evidence_quotes.append(q_str)
+                        quoted = True
+                        break
+                if not quoted and kw in (title or "").lower():
+                    q_str = f"عبارت مستخرج از عنوان فایل: «{title}» (کلیدواژهٔ منطبق: {kw})"
+                    if q_str not in evidence_quotes:
+                        evidence_quotes.append(q_str)
+
+    # Also check explicit "تخلف: ..." or "اتهام: ..." lines in the text
+    m_explicit_viol = re.search(r"(?:تخلف|اتهام|عنوان\s*مجرمانه|موضوع\s*تخلف)\s*[:：\-]\s*([^\n\r✅]{2,80})", norm_text or "")
+    if m_explicit_viol:
+        v_text = m_explicit_viol.group(1).strip()
+        q_viol = f"تصریح مستقیم تخلف در متن تصویر: «{v_text}»"
+        if q_viol not in evidence_quotes:
+            evidence_quotes.insert(0, q_viol)
+        if not matched_charges:
+            matched_charges.append(f"تخلف تصریح‌شده در سند تصویری: {v_text}")
+            matched_articles.append("مادهٔ ۱۴ قانون جرایم رایانه‌ای و مقررات نظارت بر فضای مجازی")
+            max_severity = max(max_severity, 2)
+
+    has_criminal = len(matched_charges) > 0
+    if max_severity >= 4:
+        risk_level = "بحرانی (اولویت فوری قضایی و امنیتی)"
+    elif max_severity == 3:
+        risk_level = "بالا (نیازمند تشکیل پرونده و اقدام ضابطین)"
+    elif max_severity == 2:
+        risk_level = "متوسط (نیازمند مستندسازی و صدور دستور مسدودسازی/تذکر)"
+    else:
+        risk_level = "عادی (فاقد مصداق مجرمانهٔ آشکار در عنوان و متن)"
+
+    verbatim_preview = " / ".join(lines[:4])[:280] if lines else "بدون نوشتهٔ متنی در داخل تصویر"
+    exact_text_inspection = (
+        f"عنوان دقیق فایل: «{title}» | متن دقیق نوشته‌شده روی عکس: «{verbatim_preview}»"
+    )
+
+    if has_criminal:
+        subj_str = personal_identity.get("full_name") or account_label
+        judicial_summary = (
+            f"بر اساس واکاوی دقیق عنوان فایل («{title}») و عین نوشته‌های استخراج‌شده از روی عکس مربوط به «{subj_str}» "
+            f"در سرفصل «{thematic_category}»، قرائن مجرمانه و قضایی منطبق با «{' ؛ '.join(matched_charges)}» احراز گردید. "
+            f"مستندات قانونی مرتبط شامل «{' ؛ '.join(matched_articles)}» با سطح ریسک «{risk_level}» می‌باشد."
+        )
+        recommended_action = " ؛ ".join(matched_actions)
+    else:
+        judicial_summary = (
+            f"بر اساس بررسی دقیق عنوان («{title}») و نوشتار روی عکس در سرفصل «{thematic_category}»، "
+            f"عبارت یا قرینهٔ مجرمانهٔ مستقیمی منطبق با عناوین کیفری قانون جرایم رایانه‌ای یا قانون مجازات اسلامی مشاهده نشد "
+            f"و تصویر به عنوان سند/مدرک آرشیوی ثبت گردید."
+        )
+        recommended_action = "بایگانی در پوشهٔ تخصصی و نگهداری هش یکتای فایل (SHA-256) جهت استنادهای آتی"
+
+    return {
+        "has_criminal_indicator": has_criminal,
+        "risk_level": risk_level,
+        "criminal_charges": matched_charges,
+        "legal_articles": matched_articles,
+        "evidence_quotes": evidence_quotes[:6],
+        "exact_text_inspection": exact_text_inspection,
+        "judicial_summary": judicial_summary,
+        "recommended_action": recommended_action,
+    }
 
 
 def _classify_nature_and_12_categories(
@@ -1009,15 +1689,16 @@ def analyze_image_nature_and_topic(
     relative_path: str = "",
     source_url: str = "",
     template_overrides: Optional[Dict[str, Any]] = None,
+    ocr_engine: str = "paddleocr",
 ) -> ImageAnalysisResult:
     """
-    Performs a two-level hierarchical analysis of a screenshot / image:
-    - Priority 1: Username & Account ID (`account_id`, `account_username`, `account_label`)
-    - Priority 2: 12 Thematic Categories (`اجتماعی`, `اقتصادی`, `امنیتی`, `جاسوسی`,
-      `دفاعی (نظامی، کویر و مرز)`, `دین و روحانیت`, `رزمایش`, `سایبری`, `سیاسی`,
-      `علم و فناوری`, `فرهنگی`, `هواگرد (پهپاد، ریزپرنده، جنگنده و ...)`)
-    along with visual nature (`image_nature`), offline OCR text, and the structured
-    report template (قواره) strictly for «فرهنگی» and «اجتماعی».
+    Performs a comprehensive multi-axis analysis of a screenshot / camera photo / document image:
+    1. Capture source classification (اسکرین‌شات، عکس با دوربین، عکس سوژه، سند اسکن‌شده، نقشه)
+    2. Subject ID, subject type, location name, and GPS coordinates (from EXIF & text)
+    3. Exact title & written text analysis + Legal/Judicial Criminal Assessment
+    4. Two-level hierarchical folder classification (Personal Folder / Account ID -> 12 Thematic Categories)
+    5. Personal & Civil Identity Dossier (نام، نام پدر، کدملی، شناسنامه، موبایل، تلفن، آدرس)
+    6. Cultural & Social structured templates (قوارهٔ فرهنگی و اجتماعی)
     """
     norm_text = normalize_persian_text(extracted_text or "")
     words = [w for w in norm_text.split() if w.strip()]
@@ -1041,6 +1722,25 @@ def analyze_image_nature_and_topic(
     )
 
     visual = _compute_visual_metrics(image_path)
+    location_name, gps_coordinates, province, city, address, postal_code = _extract_location_and_coordinates(
+        title=title,
+        relative_path=relative_path,
+        norm_text=norm_text,
+        exif_gps=visual.get("exif_gps", ""),
+    )
+
+    capture_source_category, subject_classification, personal_folder, detected_caption = _classify_capture_source_and_subject(
+        title=title,
+        relative_path=relative_path,
+        norm_text=norm_text,
+        visual=visual,
+        word_count=word_count,
+        account_id=account_id,
+        account_label=account_label,
+        gps_coordinates=gps_coordinates,
+        location_name=location_name,
+    )
+
     image_nature, thematic_category, tags = _classify_nature_and_12_categories(
         title=title,
         relative_path=f"{source_url} {relative_path}".strip(),
@@ -1051,6 +1751,11 @@ def analyze_image_nature_and_topic(
         account_id=account_id,
         account_label=account_label,
     )
+
+    if gps_coordinates and f"مختصات: {gps_coordinates}" not in tags:
+        tags.append(f"مختصات: {gps_coordinates}")
+    elif city and f"مکان: {city}" not in tags:
+        tags.append(f"مکان: {city}")
 
     if (ocr_confidence and ocr_confidence >= 80) or word_count >= 8 or visual["paper_bg_ratio"] >= 0.7:
         confidence_label = "بالا"
@@ -1075,13 +1780,77 @@ def analyze_image_nature_and_topic(
             thematic_category=thematic_category,
         )
 
+    personal_identity = extract_personal_identity_profile(
+        title=title,
+        relative_path=relative_path,
+        norm_text=norm_text,
+        account_id=account_id,
+        account_username=account_username,
+        account_label=account_label,
+        personal_folder=personal_folder,
+        thematic_category=thematic_category,
+        location_name=location_name,
+        gps_coordinates=gps_coordinates,
+        province=province,
+        city=city,
+        address=address,
+        postal_code=postal_code,
+        template_fields=template_fields,
+    )
+
+    # Refine personal_folder if full_name was extracted
+    if personal_identity.get("full_name") and personal_identity["full_name"] not in personal_folder:
+        if account_id:
+            personal_folder = f"پوشهٔ شخصی: {personal_identity['full_name']} ({account_id})"
+        else:
+            personal_folder = f"پوشهٔ شخصی: {personal_identity['full_name']}"
+        personal_identity["personal_folder"] = personal_folder
+
+    criminal_assessment = evaluate_criminal_and_judicial_indicators(
+        title=title,
+        norm_text=norm_text,
+        thematic_category=thematic_category,
+        account_label=account_label,
+        personal_identity=personal_identity,
+    )
+
+    engine_label_map = {
+        "paddleocr": "موتور بومی پدل (PaddleOCR · دیکشنری فارسی)",
+        "hybrid": "ترکیبی هوشمند (پدل + تسراکت ۵)",
+        "tesseract": "موتور تسراکت ۵ (Tesseract LSTM)",
+    }
+    engine_display = engine_label_map.get((ocr_engine or "paddleocr").lower(), ocr_engine or "PaddleOCR")
+
     key_findings: List[str] = [
-        f"اولویت اول دسته‌بندی (نام کاربری و آیدی): {account_label} · بستر: {platform_source}",
-        f"اولویت دوم دسته‌بندی (سرفصل موضوعی ۱۲گانه): {thematic_category}",
-        f"ماهیت بصری و ساختاری: {image_nature}",
-        f"ابعاد و هندسهٔ تصویر: {visual['width']}×{visual['height']} پیکسل ({visual['orientation']}، نسبت ابعاد {visual['aspect_ratio']})",
-        f"پروفایل رنگی و روشنایی: {visual['color_profile_label']} (میانگین روشنایی {visual['mean_brightness']} از ۲۵۵، رنگ غالب {visual['dominant_color_hex']})",
+        f"نوع عکس و منبع ثبت: {capture_source_category} · سوژه: {subject_classification}",
+        f"پوشهٔ شخصی (سطح اول): {personal_folder} · شناسه آی‌دی: {account_label} ({platform_source})",
+        f"دسته‌بندی موضوعی ۱۲گانه (سطح دوم): {thematic_category}",
+        f"موقعیت مکانی و مختصات: {location_name}{f' · مختصات GPS: {gps_coordinates}' if gps_coordinates else ''}",
+        f"بررسی حقوقی و قضایی: سطح ریسک «{criminal_assessment['risk_level']}»"
+        + (
+            f" · عناوین مجرمانه: {' ، '.join(criminal_assessment['criminal_charges'])}"
+            if criminal_assessment["has_criminal_indicator"]
+            else " · فاقد مصداق مجرمانهٔ آشکار در متن"
+        ),
+        f"موتور تشخیص متن (OCR): {engine_display} · ابعاد: {visual['width']}×{visual['height']} پیکسل ({visual['orientation']})",
     ]
+
+    if personal_identity.get("has_identity_data"):
+        id_parts: List[str] = []
+        if personal_identity.get("full_name"):
+            id_parts.append(f"نام: {personal_identity['full_name']}")
+        if personal_identity.get("father_name"):
+            id_parts.append(f"نام پدر: {personal_identity['father_name']}")
+        if personal_identity.get("national_id"):
+            id_parts.append(f"کدملی: {personal_identity['national_id']}")
+        if personal_identity.get("birth_certificate_no"):
+            id_parts.append(f"ش.ش: {personal_identity['birth_certificate_no']}")
+        if personal_identity.get("mobile_phone"):
+            id_parts.append(f"موبایل: {personal_identity['mobile_phone']}")
+        if personal_identity.get("address"):
+            id_parts.append(f"آدرس: {personal_identity['address']}")
+        if id_parts:
+            key_findings.append("مشخصات انفرادی و شناسنامه‌ای مستخرج: " + " | ".join(id_parts))
 
     if template_applicable and template_fields:
         key_findings.append(
@@ -1092,30 +1861,29 @@ def analyze_image_nature_and_topic(
     if word_count > 0:
         conf_str = f" با میانگین اطمینان {ocr_confidence:.1f}٪" if ocr_confidence is not None else ""
         key_findings.append(
-            f"تحلیل نوشتاری (OCR): دارای {word_count} کلمه در قالب {line_count} سطر متنی{conf_str}."
+            f"تحلیل دقیق عنوان و نوشتهٔ عکس ({engine_display}): دارای {word_count} کلمه در قالب {line_count} سطر متنی{conf_str}."
         )
         preview_excerpt = " / ".join(lines[:2])[:160]
-        key_findings.append(f"گزیدهٔ شاخص متن داخل تصویر: «{preview_excerpt}»")
+        key_findings.append(f"عین نوشتهٔ شاخص روی تصویر: «{preview_excerpt}»")
     else:
         key_findings.append(
-            "تحلیل نوشتاری (OCR): هیچ لایهٔ متنی یا نوشتار قابل استخراجی در این تصویر مشاهده نشد."
+            f"تحلیل نوشتاری ({engine_display}): هیچ لایهٔ متنی یا نوشتار قابل استخراجی در این تصویر مشاهده نشد."
         )
 
     if word_count > 0:
         first_line = lines[0][:110] if lines else ""
         summary = (
-            f"در سطح اول دسته‌بندی (نام کاربری و آیدی)، این تصویر به «{account_label}» ({platform_source}) تعلق دارد و "
-            f"در سطح دوم دسته‌بندی موضوعی در سرفصل «{thematic_category}» جای می‌گیرد. "
-            f"از نظر ماهیت بصری، فایل «{title}» یک «{image_nature}» با ابعاد {visual['width']}×{visual['height']} پیکسل "
-            f"({visual['orientation']}) و {visual['color_profile_label']} است. "
-            f"موتور تشخیص متن آفلاین ساهر در مجموع {word_count} کلمه ({line_count} سطر) را از داخل این تصویر استخراج کرده است"
-            f"{f' که بخش آغازین آن شامل عبارت «{first_line}» است' if first_line else ''}."
+            f"این تصویر از نظر نوع ثبت در ردهٔ «{capture_source_category}» و از نظر نوع سوژه در گروه «{subject_classification}» قرار دارد. "
+            f"در پوشه‌بندی شخصی به «{personal_folder}» (شناسه: {account_label}) تعلق داشته و پس از پوشه‌بندی شخصی، در سرفصل موضوعی ۱۲گانهٔ «{thematic_category}» دسته‌بندی شده است. "
+            f"موقعیت مکانی تصویر «{location_name}»{f' با مختصات {gps_coordinates}' if gps_coordinates else ''} ثبت گردیده است. "
+            f"بر اساس تحلیل دقیق عنوان فایل («{title}») و {word_count} کلمه متن نوشته‌شده روی عکس{f' («{first_line}»)' if first_line else ''}، "
+            f"{criminal_assessment['judicial_summary']}"
         )
     else:
         summary = (
-            f"در سطح اول دسته‌بندی (نام کاربری و آیدی)، این تصویر در گروه «{account_label}» و در سطح دوم در سرفصل موضوعی "
-            f"«{thematic_category}» طبقه‌بندی شده است. فایل «{title}» دارای ماهیت «{image_nature}» با ابعاد "
-            f"{visual['width']}×{visual['height']} پیکسل ({visual['orientation']}) بوده و فاقد نوشتار چاپی غالب است."
+            f"این تصویر از نوع «{capture_source_category}» و دارای سوژهٔ «{subject_classification}» است که در «{personal_folder}» "
+            f"و سرفصل موضوعی ۱۲گانهٔ «{thematic_category}» طبقه‌بندی شده است. فایل «{title}» با ابعاد "
+            f"{visual['width']}×{visual['height']} پیکسل ({visual['orientation']}) فاقد نوشتار چاپی غالب بوده و {criminal_assessment['judicial_summary']}"
         )
 
     return ImageAnalysisResult(
@@ -1141,11 +1909,19 @@ def analyze_image_nature_and_topic(
         line_count=line_count,
         bbox_count=bbox_count,
         ocr_confidence=ocr_confidence,
+        ocr_engine=ocr_engine or "paddleocr",
         extracted_text=norm_text,
+        personal_folder=personal_folder,
         account_id=account_id,
         account_username=account_username,
         account_label=account_label,
         platform_source=platform_source,
+        capture_source_category=capture_source_category,
+        subject_classification=subject_classification,
+        camera_info=visual.get("camera_info", "بدون فرادادهٔ دوربین"),
+        location_name=location_name,
+        gps_coordinates=gps_coordinates,
+        detected_caption=detected_caption,
         thematic_category=thematic_category,
         image_nature=image_nature,
         detected_topic=thematic_category,
@@ -1153,6 +1929,8 @@ def analyze_image_nature_and_topic(
         tags=tags,
         key_findings=key_findings,
         analysis_summary=summary,
+        personal_identity=personal_identity,
+        criminal_assessment=criminal_assessment,
         template_applicable=template_applicable,
         template_fields=template_fields,
         formatted_template_text=formatted_template_text,
@@ -1162,17 +1940,28 @@ def analyze_image_nature_and_topic(
 def merge_batch_cultural_social_templates(analyses: List[ImageAnalysisResult]) -> None:
     """
     When multiple screenshots in a folder belong to the same account_id, combines
-    their extracted Cultural/Social template fields (full_name, national_id, phone_number,
-    guidance_date, numeric_id, account_handle, description, city_hashtag,
-    occupation, profile_url, hashtags) so every screenshot of that account has the most
-    complete template possible.
+    their extracted Cultural/Social template fields and Personal Identity fields
+    so every screenshot of that account has the most complete dossier possible.
     """
     merged_by_account: Dict[str, Dict[str, Any]] = {}
+    merged_identity_by_account: Dict[str, Dict[str, Any]] = {}
+
     for item in analyses:
-        if not item.template_applicable or not item.template_fields:
-            continue
         acc_key = (item.account_id or "").strip().lower()
         if not acc_key or acc_key == "نامشخص":
+            continue
+
+        # Merge personal_identity across same account
+        if getattr(item, "personal_identity", None):
+            id_bucket = merged_identity_by_account.setdefault(acc_key, {})
+            for k, val in item.personal_identity.items():
+                if isinstance(val, str) and val.strip() and val != "موقعیت مکانی ثبت‌نشده":
+                    if not id_bucket.get(k) or len(val.strip()) > len(str(id_bucket.get(k, ""))):
+                        id_bucket[k] = val.strip()
+                elif isinstance(val, bool) and val:
+                    id_bucket[k] = True
+
+        if not item.template_applicable or not item.template_fields:
             continue
         bucket = merged_by_account.setdefault(
             acc_key,
@@ -1203,7 +1992,6 @@ def merge_batch_cultural_social_templates(analyses: List[ImageAnalysisResult]) -
         city_val = (tf.get("city_hashtag") or "").strip()
         if city_val and city_val != "#کاشمر":
             bucket["city_hashtag"] = city_val
-        # Prefer URL with query parameters (like ?stkn=...) over bare URL
         url_val = (tf.get("profile_url") or "").strip()
         if url_val and (not bucket["profile_url"] or len(url_val) > len(bucket["profile_url"])):
             bucket["profile_url"] = url_val
@@ -1216,9 +2004,20 @@ def merge_batch_cultural_social_templates(analyses: List[ImageAnalysisResult]) -
                 bucket["hashtags"].append(tag)
 
     for item in analyses:
+        acc_key = (item.account_id or "").strip().lower()
+        if acc_key and acc_key in merged_identity_by_account and getattr(item, "personal_identity", None) is not None:
+            id_b = merged_identity_by_account[acc_key]
+            updated_id = dict(item.personal_identity)
+            for k, v in id_b.items():
+                if not updated_id.get(k) or updated_id.get(k) == "موقعیت مکانی ثبت‌نشده":
+                    updated_id[k] = v
+            item.personal_identity = updated_id
+            if updated_id.get("full_name") and updated_id["full_name"] not in item.personal_folder:
+                item.personal_folder = f"پوشهٔ شخصی: {updated_id['full_name']} ({item.account_id})"
+                item.personal_identity["personal_folder"] = item.personal_folder
+
         if not item.template_applicable or not item.template_fields:
             continue
-        acc_key = (item.account_id or "").strip().lower()
         if acc_key in merged_by_account:
             b = merged_by_account[acc_key]
             updated_fields = dict(item.template_fields)

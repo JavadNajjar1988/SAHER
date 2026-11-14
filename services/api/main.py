@@ -6,7 +6,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, Response
-from services.analysis.word_exporter import generate_image_analysis_docx
+from services.analysis.word_exporter import (
+    generate_image_analysis_docx,
+    generate_identity_profiles_docx,
+)
 from services.api.config import settings
 from services.api.database import init_db, get_db
 from services.api.migrations import LegacyMigrationManager
@@ -27,6 +30,7 @@ from services.api.schemas import (
     PageItemDTO,
     PageUpdateDTO,
     OCREngineStatusDTO,
+    OCREngineSwitchDTO,
     JobItemDTO,
     JobListResponseDTO,
     ReanalyzeRequestDTO,
@@ -40,9 +44,18 @@ from services.api.schemas import (
     ImageAnalysisItemDTO,
     FolderAnalysisResponseDTO,
     ImageWordExportRequestDTO,
+    IdentityProfileItemDTO,
+    IdentityProfileUpsertDTO,
+    IdentityProfileListResponseDTO,
+    IdentityProfileWordExportRequestDTO,
 )
 from services.ingestion.extractor import render_page_preview_png
-from services.ocr import get_ocr_engine
+from services.ocr import (
+    get_ocr_engine,
+    set_ocr_engine_by_name,
+    list_available_ocr_engines,
+    get_paddleocr_repo_metadata,
+)
 from services.worker.queue import (
     JobQueueRepository,
     JobNotFoundError,
@@ -261,6 +274,28 @@ def get_ocr_status():
         offline_ready=st.offline_ready,
         error_code=st.error_code,
         error_message=st.error_message,
+        available_engines=list_available_ocr_engines(),
+        paddleocr_metadata=get_paddleocr_repo_metadata(),
+    )
+
+
+@app.post(f"{settings.api_prefix}/ocr/engine", response_model=OCREngineStatusDTO)
+def switch_ocr_engine(payload: OCREngineSwitchDTO):
+    engine = set_ocr_engine_by_name(payload.engine_name)
+    st = engine.inspect_status()
+    return OCREngineStatusDTO(
+        ready=st.ready,
+        engine_name=st.engine_name,
+        engine_version=st.engine_version,
+        model_dir=st.model_dir,
+        installed_languages=st.installed_languages,
+        required_languages=st.required_languages,
+        missing_languages=st.missing_languages,
+        offline_ready=st.offline_ready,
+        error_code=st.error_code,
+        error_message=st.error_message,
+        available_engines=list_available_ocr_engines(),
+        paddleocr_metadata=get_paddleocr_repo_metadata(),
     )
 
 
@@ -609,6 +644,7 @@ def list_migration_audits():
 def _build_folder_analysis_response(
     analyses_raw: List,
     folder_name: str,
+    ocr_engine: str = "paddleocr",
 ) -> FolderAnalysisResponseDTO:
     from services.analysis.image_analyzer import merge_batch_cultural_social_templates
 
@@ -616,6 +652,9 @@ def _build_folder_analysis_response(
     account_category_tree: Dict[str, Dict[str, int]] = {}
     topic_breakdown: Dict[str, int] = {}
     nature_breakdown: Dict[str, int] = {}
+    source_type_breakdown: Dict[str, int] = {}
+    location_breakdown: Dict[str, int] = {}
+    criminal_count = 0
     dto_items: List[ImageAnalysisItemDTO] = []
 
     # Unify Priority-1 account_label and account_username for screenshots sharing the same canonical account_id
@@ -648,6 +687,11 @@ def _build_folder_analysis_response(
     for item in analyses_raw:
         acc_label = getattr(item, "account_label", None) or "بدون نام کاربری / آیدی مشخص"
         cat_label = getattr(item, "thematic_category", None) or item.detected_topic
+        src_cat = getattr(item, "capture_source_category", None) or "اسکرین‌شات موبایل / شبکهٔ اجتماعی"
+        loc_lbl = getattr(item, "location_name", None) or "موقعیت مکانی ثبت‌نشده"
+        crim = getattr(item, "criminal_assessment", None) or {}
+        if crim.get("has_criminal_indicator"):
+            criminal_count += 1
 
         account_breakdown[acc_label] = account_breakdown.get(acc_label, 0) + 1
         if acc_label not in account_category_tree:
@@ -658,6 +702,9 @@ def _build_folder_analysis_response(
 
         topic_breakdown[cat_label] = topic_breakdown.get(cat_label, 0) + 1
         nature_breakdown[item.image_nature] = nature_breakdown.get(item.image_nature, 0) + 1
+        source_type_breakdown[src_cat] = source_type_breakdown.get(src_cat, 0) + 1
+        location_breakdown[loc_lbl] = location_breakdown.get(loc_lbl, 0) + 1
+
         d = asdict(item)
         d.pop("image_path", None)
         dto_items.append(ImageAnalysisItemDTO(**d))
@@ -665,10 +712,14 @@ def _build_folder_analysis_response(
     return FolderAnalysisResponseDTO(
         folder_name=folder_name or "پوشهٔ تصاویر انتخابی",
         total_images=len(dto_items),
+        ocr_engine=ocr_engine or "paddleocr",
         account_breakdown=account_breakdown,
         account_category_tree=account_category_tree,
         topic_breakdown=topic_breakdown,
         nature_breakdown=nature_breakdown,
+        source_type_breakdown=source_type_breakdown,
+        location_breakdown=location_breakdown,
+        criminal_count=criminal_count,
         items=dto_items,
     )
 
@@ -679,6 +730,7 @@ async def analyze_image_folder(
     folder_name: Optional[str] = Form(None),
     relative_paths: Optional[str] = Form(None),
     source_url: Optional[str] = Form(None),
+    ocr_engine: Optional[str] = Form(None),
 ):
     if not files:
         raise IngestionValidationError(
@@ -698,6 +750,7 @@ async def analyze_image_folder(
 
     analyses_raw = []
     inferred_folder = (folder_name or "").strip()
+    effective_ocr_engine = (ocr_engine or "paddleocr").strip().lower()
 
     for idx, up_file in enumerate(files):
         raw_filename = up_file.filename or f"image_{idx + 1}.png"
@@ -734,6 +787,7 @@ async def analyze_image_folder(
             relative_path=rel_path,
             auto_update_metadata=True,
             source_url=source_url or "",
+            ocr_engine=effective_ocr_engine,
         )
         if analysis is not None:
             analyses_raw.append(analysis)
@@ -741,6 +795,7 @@ async def analyze_image_folder(
     return _build_folder_analysis_response(
         analyses_raw=analyses_raw,
         folder_name=inferred_folder or "پوشهٔ تصاویر انتخابی",
+        ocr_engine=effective_ocr_engine,
     )
 
 
@@ -748,6 +803,7 @@ async def analyze_image_folder(
 def analyze_existing_images(payload: ImageWordExportRequestDTO):
     analyses_raw = []
     overrides_map = payload.template_overrides_by_file or {}
+    effective_ocr_engine = (payload.ocr_engine or "paddleocr").strip().lower()
     for fid in payload.file_ids:
         item = ArchiveRepository.get_file(fid)
         if not item:
@@ -760,6 +816,7 @@ def analyze_existing_images(payload: ImageWordExportRequestDTO):
             auto_update_metadata=True,
             source_url=payload.source_url or "",
             template_overrides=overrides_map.get(fid),
+            ocr_engine=effective_ocr_engine,
         )
         if analysis is not None:
             analyses_raw.append(analysis)
@@ -770,6 +827,7 @@ def analyze_existing_images(payload: ImageWordExportRequestDTO):
     return _build_folder_analysis_response(
         analyses_raw=analyses_raw,
         folder_name=payload.folder_name or "تصاویر منتخب کتابخانه",
+        ocr_engine=effective_ocr_engine,
     )
 
 
@@ -833,6 +891,69 @@ def export_single_file_analysis_word(file_id: str):
     )
     headers = {
         "Content-Disposition": f'attachment; filename="saher-analysis-{file_id[:8]}.docx"',
+        "X-Content-Type-Options": "nosniff",
+    }
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers=headers,
+    )
+
+
+# ============================================================================
+# Personal & Civil Identity Dossiers API (مشخصات انفرادی و شناسنامه‌ای)
+# ============================================================================
+
+
+@app.get(f"{settings.api_prefix}/profiles", response_model=IdentityProfileListResponseDTO)
+def list_identity_profiles(q: Optional[str] = Query(None)):
+    rows = ArchiveRepository.list_identity_profiles(query=q or "")
+    items = [IdentityProfileItemDTO(**r) for r in rows]
+    return IdentityProfileListResponseDTO(total=len(items), items=items)
+
+
+@app.post(f"{settings.api_prefix}/profiles", response_model=IdentityProfileItemDTO, status_code=201)
+def create_identity_profile(payload: IdentityProfileUpsertDTO):
+    row = ArchiveRepository.upsert_identity_profile(payload.model_dump())
+    return IdentityProfileItemDTO(**row)
+
+
+@app.put(f"{settings.api_prefix}/profiles/{{profile_id}}", response_model=IdentityProfileItemDTO)
+def update_identity_profile(profile_id: str, payload: IdentityProfileUpsertDTO):
+    row = ArchiveRepository.upsert_identity_profile(payload.model_dump(), profile_id=profile_id)
+    return IdentityProfileItemDTO(**row)
+
+
+@app.delete(f"{settings.api_prefix}/profiles/{{profile_id}}")
+def delete_identity_profile(profile_id: str):
+    deleted = ArchiveRepository.delete_identity_profile(profile_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="پروندهٔ مشخصات انفرادی یافت نشد.")
+    return {"deleted": True, "id": profile_id}
+
+
+@app.post(f"{settings.api_prefix}/profiles/sync-from-archive", response_model=IdentityProfileListResponseDTO)
+def sync_profiles_from_archive():
+    rows = ArchiveRepository.sync_identity_profiles_from_archive()
+    items = [IdentityProfileItemDTO(**r) for r in rows]
+    return IdentityProfileListResponseDTO(total=len(items), items=items)
+
+
+@app.post(f"{settings.api_prefix}/profiles/export-word")
+def export_identity_profiles_word(payload: IdentityProfileWordExportRequestDTO = Body(default=IdentityProfileWordExportRequestDTO())):
+    all_rows = ArchiveRepository.list_identity_profiles()
+    if payload.profile_ids:
+        id_set = set(payload.profile_ids)
+        rows = [r for r in all_rows if r.get("id") in id_set]
+    else:
+        rows = all_rows
+
+    docx_bytes = generate_identity_profiles_docx(
+        profiles=rows,
+        report_title=payload.report_title or "گزارش جامع مشخصات انفرادی، شناسنامه‌ای، شماره موبایل و آدرس",
+    )
+    headers = {
+        "Content-Disposition": 'attachment; filename="saher-identity-profiles-report.docx"',
         "X-Content-Type-Options": "nosniff",
     }
     return Response(

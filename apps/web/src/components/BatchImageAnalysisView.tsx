@@ -14,7 +14,8 @@ interface BatchImageAnalysisViewProps {
   archiveFiles: FileItem[];
   onRefreshArchive: () => Promise<void>;
   onOpenFileById: (fileId: string, pageNumber?: number) => void;
-  digits: (n: number) => string;
+  onOpenIdentityProfiles?: () => void;
+  digits: (n: number | string) => string;
 }
 
 const IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".bmp"];
@@ -119,6 +120,7 @@ export function BatchImageAnalysisView({
   archiveFiles,
   onRefreshArchive,
   onOpenFileById,
+  onOpenIdentityProfiles,
   digits,
 }: BatchImageAnalysisViewProps) {
   const [analysisReport, setAnalysisReport] = useState<FolderAnalysisResponse | null>(null);
@@ -128,8 +130,10 @@ export function BatchImageAnalysisView({
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [customFolderName, setCustomFolderName] = useState<string>("");
   const [instagramSourceUrl, setInstagramSourceUrl] = useState<string>("");
+  const [selectedOcrEngine, setSelectedOcrEngine] = useState<string>("paddleocr");
   const [accountFilter, setAccountFilter] = useState<string>("ALL");
   const [topicFilter, setTopicFilter] = useState<string>("ALL");
+  const [sourceTypeFilter, setSourceTypeFilter] = useState<string>("ALL");
   const [templateOverrides, setTemplateOverrides] = useState<Record<string, CulturalSocialTemplateFields>>({});
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
@@ -223,10 +227,17 @@ export function BatchImageAnalysisView({
       return;
     }
 
+    const engineFaLabel =
+      selectedOcrEngine === "paddleocr"
+        ? "موتور بومی پدل (PaddleOCR)"
+        : selectedOcrEngine === "hybrid"
+          ? "موتور ترکیبی هوشمند (پدل + تسراکت)"
+          : "موتور تسراکت ۵";
+
     setIsAnalyzing(true);
     setErrorMessage("");
     setStatusMessage(
-      `در حال استخراج نام کاربری و آیدی (اولویت ۱)، تحلیل ۱۲ سرفصل موضوعی (اولویت ۲)، تکمیل قوارهٔ فرهنگی/اجتماعی و OCR برای ${digits(validImages.length)} تصویر…`,
+      `در حال تفکیک نوع عکس (اسکرین‌شات/دوربین/سوژه)، پوشه‌بندی شخصی و شناسه آی‌دی، تحلیل ۱۲ سرفصل موضوعی، استخراج مشخصات انفرادی و بررسی موارد مجرمانه با ${engineFaLabel} برای ${digits(validImages.length)} تصویر…`,
     );
 
     try {
@@ -236,13 +247,15 @@ export function BatchImageAnalysisView({
         validImages,
         folderTitle,
         instagramSourceUrl.trim() || undefined,
+        selectedOcrEngine,
       );
       setAnalysisReport(response);
       setTemplateOverrides({});
       setAccountFilter("ALL");
       setTopicFilter("ALL");
+      setSourceTypeFilter("ALL");
       setStatusMessage(
-        `تحلیل دومرحله‌ای ${digits(response.total_images)} تصویر در «${response.folder_name}» بر اساس نام کاربری/آیدی و ۱۲ دسته‌بندی موضوعی تکمیل شد.`,
+        `تحلیل چندبعدی ${digits(response.total_images)} تصویر در «${response.folder_name}» (نوع عکس، پوشهٔ شخصی، ۱۲ سرفصل موضوعی، مشخصات انفرادی و بررسی حقوقی و قضایی) با موفقیت تکمیل شد.`,
       );
       await onRefreshArchive();
     } catch (err: any) {
@@ -261,14 +274,14 @@ export function BatchImageAnalysisView({
       return;
     }
     if (connectionMode !== "connected") {
-      setErrorMessage("این عملیات نیازمند اتصال به سرویس محلی FastAPI است.");
+      setErrorMessage("این عملیات نیازمند اتصال به سرویس محلی ساهر است.");
       return;
     }
 
     setIsAnalyzing(true);
     setErrorMessage("");
     setStatusMessage(
-      `در حال دسته‌بندی دومرحله‌ای (نام کاربری/آیدی ← ۱۲ سرفصل موضوعی) روی ${digits(existingImageFiles.length)} تصویر موجود در کتابخانه…`,
+      `در حال دسته‌بندی چندبعدی (نوع عکس، پوشهٔ شخصی و آیدی، ۱۲ سرفصل موضوعی، مشخصات انفرادی و بررسی حقوقی و قضایی) روی ${digits(existingImageFiles.length)} تصویر موجود در کتابخانه…`,
     );
 
     try {
@@ -277,13 +290,15 @@ export function BatchImageAnalysisView({
         ids,
         customFolderName.trim() || "تصاویر و اسکرین‌شات‌های آرشیو کتابخانه",
         instagramSourceUrl.trim() || undefined,
+        selectedOcrEngine,
       );
       setAnalysisReport(response);
       setTemplateOverrides({});
       setAccountFilter("ALL");
       setTopicFilter("ALL");
+      setSourceTypeFilter("ALL");
       setStatusMessage(
-        `دسته‌بندی مجزای ${digits(response.total_images)} تصویر کتابخانه بر اساس نام کاربری/آیدی و ۱۲ سرفصل موضوعی تکمیل شد و آمادهٔ خروجی Word است.`,
+        `دسته‌بندی مجزای ${digits(response.total_images)} تصویر کتابخانه تکمیل شد و آمادهٔ دریافت خروجی فارسی Word (.docx) است.`,
       );
       await onRefreshArchive();
     } catch (err: any) {
@@ -362,14 +377,18 @@ export function BatchImageAnalysisView({
     ? analysisReport.items.filter((i) => {
         const itemAcc = i.account_label || "بدون نام کاربری / آیدی مشخص";
         const itemCat = i.thematic_category || i.detected_topic;
+        const itemSrc = i.capture_source_category || "اسکرین‌شات موبایل / شبکهٔ اجتماعی";
         const passAccount = accountFilter === "ALL" || itemAcc === accountFilter;
         const passTopic = topicFilter === "ALL" || itemCat === topicFilter;
-        return passAccount && passTopic;
+        const passSource = sourceTypeFilter === "ALL" || itemSrc === sourceTypeFilter;
+        return passAccount && passTopic && passSource;
       })
     : [];
 
   const accountBreakdown = analysisReport?.account_breakdown || {};
   const accountCategoryTree = analysisReport?.account_category_tree || {};
+  const sourceTypeBreakdown = analysisReport?.source_type_breakdown || {};
+  const locationBreakdown = analysisReport?.location_breakdown || {};
 
   return (
     <section className="batch-analysis-container" data-testid="batch-image-analysis-view">
@@ -377,16 +396,21 @@ export function BatchImageAnalysisView({
       <div className="batch-upload-panel">
         <div className="batch-upload-header">
           <div>
-            <h2>تحلیل پوشهٔ عکس‌ها و اسکرین‌شات‌ها (بر اساس نام کاربری/آیدی و ۱۲ دسته‌بندی موضوعی)</h2>
+            <h2>
+              تحلیل هوشمند عکس‌ها و اسکرین‌شات‌ها (تفکیک نوع عکس، پوشهٔ شخصی و آیدی، ۱۲ سرفصل موضوعی، مشخصات انفرادی و بررسی حقوقی و قضایی)
+            </h2>
             <p>
-              پوشهٔ اسکرین‌شات‌ها یا تصاویر خود را انتخاب کنید تا سامانهٔ ساهر در{" "}
-              <strong>اولویت اول بر اساس نام کاربری و آیدی (@ID)</strong> و در{" "}
-              <strong>اولویت دوم بر اساس ۱۲ سرفصل موضوعی</strong> هر تصویر را جداگانه تحلیل کرده،{" "}
-              <strong>قوارهٔ ویژهٔ دسته‌بندی فرهنگی و اجتماعی</strong> را تکمیل نموده و در قالب فایل{" "}
-              <strong>Word (.docx)</strong> تحویل دهد:
+              پوشهٔ عکس‌ها یا اسکرین‌شات‌های خود را انتخاب کنید تا سامانهٔ ساهر هر تصویر را از نظر{" "}
+              <strong>نوع عکس (اسکرین‌شات، عکس با دوربین، عکس سوژه، سند و نقشه)</strong>،{" "}
+              <strong>پوشهٔ شخصی و شناسه آی‌دی روی عکس</strong>،{" "}
+              <strong>موقعیت مکانی و مختصات جغرافیایی (GPS)</strong>،{" "}
+              <strong>۱۲ دسته‌بندی موضوعی</strong>،{" "}
+              <strong>بررسی موارد مجرمانه بر اساس داده‌های حقوقی و قضایی</strong> و{" "}
+              <strong>مشخصات انفرادی و شناسنامه‌ای</strong> تحلیل کرده و خروجی دقیق فارسی{" "}
+              <strong>Word (.docx)</strong> تولید نماید:
             </p>
             <div className="taxonomy-reference-line" data-testid="thematic-categories-12-list">
-              <strong>۱۲ سرفصل موضوعی (اولویت دوم): </strong>
+              <strong>۱۲ سرفصل موضوعی پس از پوشه‌بندی شخصی: </strong>
               {THEMATIC_CATEGORIES_12.map((cat, idx) => (
                 <React.Fragment key={cat}>
                   {idx > 0 && <span aria-hidden="true"> · </span>}
@@ -397,11 +421,11 @@ export function BatchImageAnalysisView({
           </div>
           <div className="batch-header-inputs">
             <div className="batch-folder-title-input">
-              <label htmlFor="batch-folder-title">عنوان گزارش در فایل Word (اختیاری):</label>
+              <label htmlFor="batch-folder-title">عنوان گزارش در سند Word (اختیاری):</label>
               <input
                 id="batch-folder-title"
                 type="text"
-                placeholder="مثلاً: اسکرین‌شات‌های رصد آبان ۱۴۰۵"
+                placeholder="مثلاً: پروندهٔ تصاویر و اسکرین‌شات‌های رصد آبان ۱۴۰۵"
                 value={customFolderName}
                 disabled={isAnalyzing}
                 onChange={(e) => setCustomFolderName(e.target.value)}
@@ -409,7 +433,7 @@ export function BatchImageAnalysisView({
             </div>
             <div className="batch-folder-title-input">
               <label htmlFor="batch-instagram-url">
-                لینک اینستاگرام / URL صفحه (جهت تکمیل قوارهٔ فرهنگی و اجتماعی):
+                لینک اینستاگرام / آدرس اینترنتی صفحه (جهت تکمیل قوارهٔ فرهنگی و اجتماعی):
               </label>
               <input
                 id="batch-instagram-url"
@@ -421,6 +445,28 @@ export function BatchImageAnalysisView({
                 disabled={isAnalyzing}
                 onChange={(e) => setInstagramSourceUrl(e.target.value)}
               />
+            </div>
+            <div className="batch-folder-title-input">
+              <label htmlFor="batch-ocr-engine-select">
+                موتور تشخیص متن فارسی روی تصویر (OCR):
+              </label>
+              <select
+                id="batch-ocr-engine-select"
+                data-testid="batch-ocr-engine-select"
+                value={selectedOcrEngine}
+                disabled={isAnalyzing}
+                onChange={(e) => setSelectedOcrEngine(e.target.value)}
+              >
+                <option value="paddleocr">
+                  موتور بومی پدل (PaddleOCR · واژه‌نامهٔ فارسی و تشخیص حالت تیره)
+                </option>
+                <option value="hybrid">
+                  موتور ترکیبی هوشمند (پدل + تسراکت ۵ · بالاترین دقت فارسی و انگلیسی)
+                </option>
+                <option value="tesseract">
+                  موتور تسراکت ۵ (Tesseract LSTM · فارسی و انگلیسی)
+                </option>
+              </select>
             </div>
           </div>
         </div>
@@ -510,12 +556,25 @@ export function BatchImageAnalysisView({
           <div className="batch-results-header">
             <div>
               <h3>
-                نتیجهٔ دسته‌بندی دومرحله‌ای: {analysisReport.folder_name} (
+                نتیجهٔ دسته‌بندی چندبعدی: {analysisReport.folder_name} (
                 <span className="tabular-nums">{digits(analysisReport.total_images)}</span> تصویر)
               </h3>
+              {Object.keys(sourceTypeBreakdown).length > 0 && (
+                <p className="batch-breakdown-line">
+                  <strong>۱. تفکیک نوع عکس (اسکرین‌شات / عکس با دوربین / عکس سوژه / سند): </strong>
+                  {Object.entries(sourceTypeBreakdown).map(([srcType, cnt], idx) => (
+                    <React.Fragment key={srcType}>
+                      {idx > 0 && <span aria-hidden="true"> · </span>}
+                      <span>
+                        {srcType} (<strong className="tabular-nums">{digits(cnt)}</strong>)
+                      </span>
+                    </React.Fragment>
+                  ))}
+                </p>
+              )}
               {Object.keys(accountBreakdown).length > 0 && (
                 <p className="batch-breakdown-line">
-                  <strong>اولویت اول (نام کاربری و آیدی): </strong>
+                  <strong>۲. پوشه‌بندی شخصی و شناسه آی‌دی روی عکس (اولویت اول): </strong>
                   {Object.entries(accountBreakdown).map(([acc, cnt], idx) => (
                     <React.Fragment key={acc}>
                       {idx > 0 && <span aria-hidden="true"> · </span>}
@@ -527,7 +586,7 @@ export function BatchImageAnalysisView({
                 </p>
               )}
               <p className="batch-breakdown-line">
-                <strong>اولویت دوم (۱۲ سرفصل موضوعی): </strong>
+                <strong>۳. دسته‌بندی در ۱۲ سرفصل موضوعی پس از پوشه‌بندی شخصی (اولویت دوم): </strong>
                 {Object.entries(analysisReport.topic_breakdown).map(([topic, cnt], idx) => (
                   <React.Fragment key={topic}>
                     {idx > 0 && <span aria-hidden="true"> · </span>}
@@ -537,28 +596,55 @@ export function BatchImageAnalysisView({
                   </React.Fragment>
                 ))}
               </p>
+              {Object.keys(locationBreakdown).length > 0 && (
+                <p className="batch-breakdown-line">
+                  <strong>۴. تفکیک موقعیت مکانی و مختصات: </strong>
+                  {Object.entries(locationBreakdown).map(([loc, cnt], idx) => (
+                    <React.Fragment key={loc}>
+                      {idx > 0 && <span aria-hidden="true"> · </span>}
+                      <span>
+                        {loc} (<strong className="tabular-nums">{digits(cnt)}</strong>)
+                      </span>
+                    </React.Fragment>
+                  ))}
+                </p>
+              )}
             </div>
 
-            <button
-              type="button"
-              className="primary export-word-cta"
-              data-testid="download-full-word-report-btn"
-              disabled={isExportingWord || displayedItems.length === 0}
-              onClick={handleDownloadFullWordReport}
-            >
-              <span>⬇</span>
-              <span>
-                {isExportingWord
-                  ? "در حال صفحه‌بندی و ساخت فایل Word…"
-                  : `دریافت گزارش تحلیل مجزا در قالب Word (.docx)`}
-              </span>
-            </button>
+            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+              {onOpenIdentityProfiles && (
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={onOpenIdentityProfiles}
+                  data-testid="goto-identity-profiles-btn"
+                >
+                  🪪 صفحهٔ مشخصات انفرادی و شناسنامه‌ای
+                </button>
+              )}
+              <button
+                type="button"
+                className="primary export-word-cta"
+                data-testid="download-full-word-report-btn"
+                disabled={isExportingWord || displayedItems.length === 0}
+                onClick={handleDownloadFullWordReport}
+              >
+                <span>⬇</span>
+                <span>
+                  {isExportingWord
+                    ? "در حال صفحه‌بندی و ساخت سند فارسی Word…"
+                    : `دریافت گزارش تحلیل کامل در قالب Word (.docx)`}
+                </span>
+              </button>
+            </div>
           </div>
 
-          {/* Hierarchical Priority-1 (Account/ID) -> Priority-2 (12 Categories) Tree Panel */}
+          {/* Hierarchical Priority-1 (Personal Folder / Account ID) -> Priority-2 (12 Categories) Tree Panel */}
           {Object.keys(accountCategoryTree).length > 0 && (
             <div className="hierarchy-tree-panel" data-testid="account-category-hierarchy-panel">
-              <h4>ساختار درختی دسته‌بندی (اولویت اول: نام کاربری و آیدی ← اولویت دوم: سرفصل موضوعی)</h4>
+              <h4>
+                ساختار درختی دسته‌بندی (سطح اول: پوشه‌بندی شخصی و شناسه آی‌دی ← سطح دوم: ۱۲ سرفصل موضوعی)
+              </h4>
               <div className="hierarchy-account-grid">
                 {Object.entries(accountCategoryTree).map(([accLabel, subCats]) => {
                   const totalForAcc = accountBreakdown[accLabel] || 0;
@@ -608,14 +694,46 @@ export function BatchImageAnalysisView({
             </div>
           )}
 
+          {/* Capture Source Type Filter Tabs (اسکرین‌شات / عکس با دوربین / عکس سوژه / سند) */}
+          {Object.keys(sourceTypeBreakdown).length > 0 && (
+            <div
+              className="batch-filter-bar"
+              role="tablist"
+              aria-label="فیلتر بر اساس نوع عکس (اسکرین‌شات، عکس با دوربین، عکس سوژه)"
+            >
+              <span className="filter-bar-label">نوع عکس (اسکرین‌شات / دوربین / سوژه):</span>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sourceTypeFilter === "ALL"}
+                className={sourceTypeFilter === "ALL" ? "active" : ""}
+                onClick={() => setSourceTypeFilter("ALL")}
+              >
+                همهٔ انواع عکس ({digits(analysisReport.total_images)})
+              </button>
+              {Object.entries(sourceTypeBreakdown).map(([srcType, count]) => (
+                <button
+                  key={srcType}
+                  type="button"
+                  role="tab"
+                  aria-selected={sourceTypeFilter === srcType}
+                  className={sourceTypeFilter === srcType ? "active" : ""}
+                  onClick={() => setSourceTypeFilter(srcType)}
+                >
+                  {srcType} ({digits(count)})
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* Priority 1 Filter Tabs: Username & ID */}
           {Object.keys(accountBreakdown).length > 1 && (
             <div
               className="batch-filter-bar"
               role="tablist"
-              aria-label="فیلتر اولویت اول بر اساس نام کاربری و آیدی"
+              aria-label="فیلتر اولویت اول بر اساس پوشهٔ شخصی و شناسه آیدی"
             >
-              <span className="filter-bar-label">اولویت ۱ (نام کاربری / آیدی):</span>
+              <span className="filter-bar-label">پوشهٔ شخصی / شناسه آی‌دی:</span>
               <button
                 type="button"
                 role="tab"
@@ -646,7 +764,7 @@ export function BatchImageAnalysisView({
             role="tablist"
             aria-label="فیلتر اولویت دوم بر اساس ۱۲ سرفصل موضوعی"
           >
-            <span className="filter-bar-label">اولویت ۲ (سرفصل موضوعی):</span>
+            <span className="filter-bar-label">سرفصل موضوعی ۱۲گانه:</span>
             <button
               type="button"
               role="tab"
@@ -729,27 +847,31 @@ export function BatchImageAnalysisView({
                       </div>
                     </div>
 
-                    {/* Priority 1 & Priority 2 Hierarchical Classification Row */}
+                    {/* Multi-Axis Classification Row: Personal Folder, ID, 12 Category, Source Type, Subject, Location & GPS */}
                     <div className="batch-item-meta tabular-nums">
                       <span data-testid={`item-account-${idx + 1}`}>
-                        <strong>اولویت ۱ (نام کاربری / آیدی):</strong>{" "}
-                        <bdi>{accLabel}</bdi>
+                        <strong>پوشهٔ شخصی / آیدی (سطح ۱):</strong>{" "}
+                        <bdi>{item.personal_folder || accLabel}</bdi>
                       </span>
                       <span aria-hidden="true">·</span>
                       <span data-testid={`item-category-${idx + 1}`}>
-                        <strong>اولویت ۲ (دسته‌بندی موضوعی):</strong> {catLabel}
+                        <strong>سرفصل موضوعی ۱۲گانه (سطح ۲):</strong> {catLabel}
                       </span>
-                      {item.platform_source && (
-                        <>
-                          <span aria-hidden="true">·</span>
-                          <span>
-                            <strong>بستر:</strong> {item.platform_source}
-                          </span>
-                        </>
-                      )}
                       <span aria-hidden="true">·</span>
                       <span>
-                        <strong>ماهیت تصویر:</strong> {item.image_nature}
+                        <strong>نوع عکس:</strong>{" "}
+                        {item.capture_source_category || "اسکرین‌شات موبایل / شبکهٔ اجتماعی"}
+                      </span>
+                      <span aria-hidden="true">·</span>
+                      <span>
+                        <strong>نوع سوژه:</strong>{" "}
+                        {item.subject_classification || item.image_nature}
+                      </span>
+                      <span aria-hidden="true">·</span>
+                      <span>
+                        <strong>موقعیت مکانی:</strong>{" "}
+                        {item.location_name || "موقعیت مکانی ثبت‌نشده"}
+                        {item.gps_coordinates ? ` (مختصات: ${item.gps_coordinates})` : ""}
                       </span>
                       <span aria-hidden="true">·</span>
                       <span>
@@ -759,12 +881,168 @@ export function BatchImageAnalysisView({
                       <span>
                         کلمات استخراج‌شده: {digits(item.word_count)}
                         {item.ocr_confidence != null
-                          ? ` (دقت OCR: ${digits(Math.round(item.ocr_confidence))}٪)`
+                          ? ` (دقت تشخیص متن: ${digits(Math.round(item.ocr_confidence))}٪)`
                           : ""}
                       </span>
                     </div>
 
                     <p className="batch-item-summary">{item.analysis_summary}</p>
+
+                    {/* Legal & Judicial Criminal Assessment Box */}
+                    {item.criminal_assessment && (
+                      <div
+                        className="batch-item-ocr-box"
+                        style={{
+                          borderRight: item.criminal_assessment.has_criminal_indicator
+                            ? "4px solid #b42318"
+                            : "4px solid var(--accent)",
+                          marginBottom: "10px",
+                        }}
+                        data-testid={`criminal-assessment-box-${idx + 1}`}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            flexWrap: "wrap",
+                            gap: "8px",
+                            marginBottom: "6px",
+                          }}
+                        >
+                          <strong>
+                            ⚖ تحلیل دقیق عنوان و نوشتهٔ عکس و بررسی موارد مجرمانه (حقوقی و قضایی):
+                          </strong>
+                          <span
+                            className="tag"
+                            style={{
+                              background: item.criminal_assessment.has_criminal_indicator
+                                ? "#fef3f2"
+                                : "var(--bg)",
+                              color: item.criminal_assessment.has_criminal_indicator
+                                ? "#b42318"
+                                : "var(--text)",
+                              fontWeight: 700,
+                            }}
+                          >
+                            سطح ریسک: {item.criminal_assessment.risk_level}
+                          </span>
+                        </div>
+                        <p style={{ margin: "4px 0", fontSize: "0.9rem" }}>
+                          {item.criminal_assessment.judicial_summary}
+                        </p>
+                        {item.criminal_assessment.criminal_charges &&
+                          item.criminal_assessment.criminal_charges.length > 0 && (
+                            <p style={{ margin: "4px 0", fontSize: "0.88rem" }}>
+                              <strong>عناوین اتهامی و مجرمانه: </strong>
+                              {item.criminal_assessment.criminal_charges.join(" ؛ ")}
+                            </p>
+                          )}
+                        {item.criminal_assessment.legal_articles &&
+                          item.criminal_assessment.legal_articles.length > 0 && (
+                            <p style={{ margin: "4px 0", fontSize: "0.88rem" }}>
+                              <strong>مواد قانونی منطبق: </strong>
+                              {item.criminal_assessment.legal_articles.join(" ؛ ")}
+                            </p>
+                          )}
+                        {item.criminal_assessment.recommended_action && (
+                          <p style={{ margin: "4px 0", fontSize: "0.88rem" }}>
+                            <strong>اقدام پیشنهادی قضایی و ضابطین: </strong>
+                            {item.criminal_assessment.recommended_action}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Personal & Civil Identity Specifications Box */}
+                    {item.personal_identity && item.personal_identity.has_identity_data && (
+                      <div
+                        className="batch-item-ocr-box"
+                        style={{ marginBottom: "10px" }}
+                        data-testid={`personal-identity-box-${idx + 1}`}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            flexWrap: "wrap",
+                            gap: "8px",
+                            marginBottom: "6px",
+                          }}
+                        >
+                          <strong>
+                            🪪 مشخصات انفرادی، شناسنامه‌ای، شماره موبایل و آدرس مستخرج از تصویر:
+                          </strong>
+                          {onOpenIdentityProfiles && (
+                            <button
+                              type="button"
+                              className="secondary-btn"
+                              onClick={onOpenIdentityProfiles}
+                            >
+                              مشاهده در صفحهٔ مشخصات انفرادی ←
+                            </button>
+                          )}
+                        </div>
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+                            gap: "6px 14px",
+                            fontSize: "0.88rem",
+                          }}
+                        >
+                          <div>
+                            <strong>نام و نام خانوادگی: </strong>
+                            {item.personal_identity.full_name || "ثبت‌نشده"}
+                          </div>
+                          <div>
+                            <strong>نام پدر: </strong>
+                            {item.personal_identity.father_name || "ثبت‌نشده"}
+                          </div>
+                          <div>
+                            <strong>کد ملی: </strong>
+                            {item.personal_identity.national_id
+                              ? digits(item.personal_identity.national_id)
+                              : "ثبت‌نشده"}
+                          </div>
+                          <div>
+                            <strong>شماره شناسنامه: </strong>
+                            {item.personal_identity.birth_certificate_no
+                              ? digits(item.personal_identity.birth_certificate_no)
+                              : "ثبت‌نشده"}
+                          </div>
+                          <div>
+                            <strong>شماره موبایل / تلفن همراه: </strong>
+                            {item.personal_identity.mobile_phone
+                              ? digits(item.personal_identity.mobile_phone)
+                              : "ثبت‌نشده"}
+                          </div>
+                          <div>
+                            <strong>تلفن ثابت: </strong>
+                            {item.personal_identity.landline_phone
+                              ? digits(item.personal_identity.landline_phone)
+                              : "ثبت‌نشده"}
+                          </div>
+                          <div>
+                            <strong>شهر و آدرس: </strong>
+                            {[
+                              item.personal_identity.province,
+                              item.personal_identity.city,
+                              item.personal_identity.address,
+                            ]
+                              .filter(Boolean)
+                              .join(" ، ") || "ثبت‌نشده"}
+                          </div>
+                          <div>
+                            <strong>آیدی فضای مجازی: </strong>
+                            <span dir="ltr">
+                              {item.personal_identity.account_handle || "—"}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Cultural & Social Structured Template Box — Strictly ONLY for «فرهنگی» and «اجتماعی» */}
                     {isCulturalOrSocial && (
